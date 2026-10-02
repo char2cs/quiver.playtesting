@@ -1,0 +1,12 @@
+services:
+  testvm:
+    build: .
+    image: quiver-testvm
+    environment:
+      VNC_PASSWORD: secret12
+      RESOLUTION: 1280x800
+    ports:
+      - "127.0.0.1:5900:5900"
+    shm_size: 256m
+    init: true
+    restart: unless-stopped
