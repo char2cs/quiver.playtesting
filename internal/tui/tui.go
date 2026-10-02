@@ -106,9 +106,10 @@ func newTable(cols []table.Column) table.Model {
 }
 
 func (m *model) resize() {
-	h := max(m.height-9, 3)
+	h, w := max(m.height-9, 3), max(m.width, 40)
 	for i := range m.tables {
 		m.tables[i].SetHeight(h)
+		m.tables[i].SetWidth(w)
 	}
 }
 

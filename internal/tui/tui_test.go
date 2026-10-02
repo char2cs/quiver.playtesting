@@ -224,3 +224,12 @@ func TestLinkStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestRowsAreRendered(t *testing.T) {
+	m := newModel(nil, "http://x", make(chan core.Event))
+	m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
+	m.Update(vmsMsg([]core.VM{{ID: 1, Name: "vm-visible", Host: "h", Port: 5900}}))
+	if out := m.tables[tabVMs].View(); !strings.Contains(out, "vm-visible") {
+		t.Fatalf("row missing from rendered table:\n%s", out)
+	}
+}
