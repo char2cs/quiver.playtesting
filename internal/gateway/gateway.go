@@ -37,7 +37,7 @@ const (
 	copyBufSize   = 32 * 1024
 	defaultConns  = 100
 	defaultIdle   = 5 * time.Minute
-	staticCSP     = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+	staticCSP     = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	genericClose  = "unavailable"
 	reasonClosed  = "closed"
 	reasonIdle    = "idle"
