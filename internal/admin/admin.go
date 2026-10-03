@@ -16,8 +16,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"quiver-playtesting/internal/core"
@@ -99,8 +102,34 @@ func codeOf(err error) string {
 	return ""
 }
 
-// Serve listens on socketPath until ctx is done.
+// PrepareDir creates dir with mode 0700 and tightens it if it already exists
+// with wider permissions. It refuses symlinks and directories owned by someone else.
+func PrepareDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("%s is owned by another user", dir)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return os.Chmod(dir, 0o700)
+	}
+	return nil
+}
+
+// Serve listens on socketPath until ctx is done. The socket's directory is
+// forced to 0700 first, so the window between bind and chmod is not reachable by other users.
 func Serve(ctx context.Context, socketPath string, svc core.Service) error {
+	if err := PrepareDir(filepath.Dir(socketPath)); err != nil {
+		return err
+	}
 	if err := clearStale(socketPath); err != nil {
 		return err
 	}
@@ -125,7 +154,14 @@ func Serve(ctx context.Context, socketPath string, svc core.Service) error {
 			}
 			return err
 		}
-		go serveConn(ctx, c, svc)
+		go func() {
+			defer func() {
+				if v := recover(); v != nil {
+					slog.Error("admin connection panic", "panic", v)
+				}
+			}()
+			serveConn(ctx, c, svc)
+		}()
 	}
 }
 

@@ -269,3 +269,12 @@ func (s *Store) LogSession(ctx context.Context, sess core.Session, ended time.Ti
 		sess.ID, sess.LinkID, sess.Label, sess.VMID, sess.VMName, sess.ClientIP, ts(sess.StartedAt), ts(ended), reason)
 	return err
 }
+
+// PruneSessionLog deletes log rows that ended before cutoff and returns how many went.
+func (s *Store) PruneSessionLog(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM session_log WHERE ended_at < ?`, ts(cutoff))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

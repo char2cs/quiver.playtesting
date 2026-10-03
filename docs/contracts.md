@@ -25,7 +25,7 @@ Start emits a "start" event. Safe for concurrent use.
 ```go
 // Dial connects to addr, performs the RFB 3.8 client handshake using VNC authentication
 // (DES challenge/response, VNC bit-reversed key) with password, and returns the conn positioned
-// right before ClientInit. Respects ctx and a handshake deadline (10s). Rejects servers that do not offer VNC auth
+// right before ClientInit. Respects ctx and a handshake deadline (10s). Refuses banned target IPs (unspecified, link-local, multicast, broadcast) on the resolved address via `rfb.CheckIP`. Answers 3.7 servers with 3.7. Rejects servers that do not offer VNC auth
 // (security type 2) unless password == "" and type 1 (None) is offered. Never logs the password.
 func Dial(ctx context.Context, addr, password string) (net.Conn, error)
 // Accept runs the server side of the handshake against an untrusted client (the browser): sends "RFB 003.008\n",
@@ -44,17 +44,21 @@ Tokens: 32 bytes crypto/rand, base64.RawURLEncoding; store sha256(token) ; Resol
 
 ## internal/gateway
 ```go
-type Config struct { Listen string; PublicHost string; RealIPHeader string; MaxConns int; IdleTimeout time.Duration }
+type Config struct {
+    Listen, PublicHost, RealIPHeader string
+    TrustedProxies []netip.Prefix // only these TCP peers may set RealIPHeader; nil trusts nobody
+    MaxConns int; IdleTimeout, MaxSession time.Duration; MaxOpenConns, PerPeerConns int
+}
 type Backend interface {
     Resolve(ctx context.Context, token string) (core.Link, core.VM, error)
     LogSession(ctx context.Context, s core.Session, ended time.Time, reason string) error
 }
-func NewServer(cfg Config, b Backend, reg *live.Registry) *http.Server // timeouts set (ReadHeaderTimeout, ReadTimeout, WriteTimeout where compatible with ws, IdleTimeout, MaxHeaderBytes)
+func NewServer(cfg Config, b Backend, reg *live.Registry) *Server // *Server embeds *http.Server; Shutdown also kills and logs live sessions; timeouts set (ReadHeaderTimeout, ReadTimeout, WriteTimeout where compatible with ws, IdleTimeout, MaxHeaderBytes)
 ```
 Routes (anything else: 404 with empty generic body):
 - `GET /s/{token}` -> serves web.FS `static/index.html` (token is NOT validated here, so page existence leaks nothing; page then opens the ws). Headers: CSP (`default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`), `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`.
 - `GET /assets/*` -> `web.FS` `static/assets/*`, long cache ok, same nosniff.
-- `GET /ws/{token}` -> Origin must equal PublicHost (host match; if PublicHost empty allow same-host only), Resolve token (all failures: identical generic 404), per-IP failed-attempt rate limit with temporary ban (e.g. 10 fails/min -> 5 min ban, 429), live.Start (busy -> same generic 404), rfb.Dial to VM (failure -> close ws with generic code, log reason vm_error), websocket accept with subprotocol "binary" tolerated, read limit, rfb.Accept on a net.Conn adapter over the ws (websocket.NetConn), then bidirectional copy. Idle timeout (no bytes either way for cfg.IdleTimeout) ends the session. Ping the client every 20s. Global cap MaxConns via semaphore (503). Session ends on ctx cancel (kill): close both ends, `reg.End(id, reason)`, `LogSession`. Real client IP from cfg.RealIPHeader (if set and present and parseable as IP) else RemoteAddr host.
+- `GET /ws/{token}` -> Origin must equal PublicHost (host match; if PublicHost empty allow same-host only), Resolve token (all failures: identical generic 404), per-IP failed-attempt rate limit with temporary ban (e.g. 10 fails/min -> 5 min ban, 429), live.Start (busy -> same generic 404), rfb.Dial to VM (failure -> close ws with generic code, log reason vm_error), websocket accept with subprotocol "binary" tolerated, read limit, rfb.Accept on a net.Conn adapter over the ws (websocket.NetConn), then bidirectional copy. Idle timeout (no bytes either way for cfg.IdleTimeout) ends the session. Ping the client every 20s. Global cap MaxConns via semaphore (503). Session ends on ctx cancel (kill): close both ends, `reg.End(id, reason)`, `LogSession`. Real client IP from cfg.RealIPHeader only when the TCP peer is in cfg.TrustedProxies (and the header parses as an IP), else RemoteAddr host. Sessions also end at MaxSession and at link expiry. Tokens are base64url, at most 128 chars, anything else is the generic 404 and counts as a failure.
 - A dedicated gateway package test uses a fake VNC server (can reuse a helper in internal/rfb test util `rfbtest`: `rfbtest.Server(t, password) (addr string)`, a minimal RFB 3.8 server with VNC auth that echoes after ServerInit; put it in `internal/rfb/rfbtest` as a normal (non _test) package so gateway tests can import it).
 
 ## web  (package web)

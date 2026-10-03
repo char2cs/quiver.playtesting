@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -45,14 +46,14 @@ func New(st core.Store, reg *live.Registry) *Service {
 }
 
 func hashToken(token string) []byte {
-	if len(token) > maxTokenLen {
-		token = token[:maxTokenLen]
-	}
 	h := sha256.Sum256([]byte(token))
 	return h[:]
 }
 
 func (s *Service) Resolve(ctx context.Context, token string) (core.Link, core.VM, error) {
+	if len(token) > maxTokenLen {
+		return core.Link{}, core.VM{}, core.ErrNotFound
+	}
 	l, err := s.st.LinkByTokenHash(ctx, hashToken(token))
 	if err != nil {
 		return core.Link{}, core.VM{}, err
@@ -113,6 +114,9 @@ func (s *Service) AddVM(ctx context.Context, name, host string, port int, passwo
 	}
 	if !validHost(host) {
 		return core.VM{}, errors.New("invalid host: expected a DNS name or IP address")
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && rfb.CheckIP(ip) != nil {
+		return core.VM{}, errors.New("invalid host: unspecified, link-local and multicast addresses are not allowed")
 	}
 	if port < 1 || port > 65535 {
 		return core.VM{}, errors.New("invalid port: expected 1 to 65535")

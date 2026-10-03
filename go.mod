@@ -1,6 +1,6 @@
 module quiver-playtesting
 
-go 1.26.2
+go 1.26.6
 
 require (
 	charm.land/bubbles/v2 v2.2.1

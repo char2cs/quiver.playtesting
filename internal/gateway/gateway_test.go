@@ -6,9 +6,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
@@ -20,10 +20,8 @@ import (
 )
 
 type fakeBackend struct {
-	mu      sync.Mutex
 	links   map[string]core.Link
 	vms     map[int64]core.VM
-	logged  []string
 	loggedC chan string
 }
 
@@ -262,8 +260,10 @@ func TestRateLimitBan(t *testing.T) {
 	}
 }
 
+var loopback = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
+
 func TestRealIPHeaderBansSeparately(t *testing.T) {
-	e := setup(t, Config{RealIPHeader: "X-Real-IP"})
+	e := setup(t, Config{RealIPHeader: "X-Real-IP", TrustedProxies: loopback})
 	for i := 0; i < maxFails; i++ {
 		e.plain(t, "/ws/bad", map[string]string{"X-Real-IP": "203.0.113.9"})
 	}

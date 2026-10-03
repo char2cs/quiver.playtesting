@@ -32,17 +32,20 @@ const (
 	resolveWait   = 5 * time.Second
 	pingEvery     = 20 * time.Second
 	pingTimeout   = 10 * time.Second
-	closeWait     = 2 * time.Second
 	logWait       = 5 * time.Second
 	copyBufSize   = 32 * 1024
 	defaultConns  = 100
 	defaultIdle   = 5 * time.Minute
+	defaultMaxSes = 4 * time.Hour
+	baseCSP       = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	staticCSP     = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	genericClose  = "unavailable"
 	reasonClosed  = "closed"
 	reasonIdle    = "idle"
 	reasonVMError = "vm_error"
 	reasonBadRFB  = "bad_client"
+	reasonMaxSes  = "max_session"
+	reasonExpired = "expired"
 )
 
 type Config struct {
@@ -51,6 +54,11 @@ type Config struct {
 	RealIPHeader string
 	MaxConns     int
 	IdleTimeout  time.Duration
+	MaxSession   time.Duration
+	// TrustedProxies are the only TCP peers whose RealIPHeader is believed.
+	TrustedProxies []netip.Prefix
+	MaxOpenConns   int
+	PerPeerConns   int
 }
 
 type Backend interface {
@@ -67,18 +75,10 @@ type handler struct {
 	static  fs.FS
 	dialVM  func(ctx context.Context, addr, password string) (net.Conn, error)
 	pingInt time.Duration
-}
 
-func NewServer(cfg Config, b Backend, reg *live.Registry) *http.Server {
-	return &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           newHandler(cfg, b, reg),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    16 << 10,
-	}
+	mu      sync.Mutex
+	closing bool
+	wg      sync.WaitGroup
 }
 
 func newHandler(cfg Config, b Backend, reg *live.Registry) *handler {
@@ -87,6 +87,9 @@ func newHandler(cfg Config, b Backend, reg *live.Registry) *handler {
 	}
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = defaultIdle
+	}
+	if cfg.MaxSession <= 0 {
+		cfg.MaxSession = defaultMaxSes
 	}
 	static, err := fs.Sub(web.FS, "static")
 	if err != nil {
@@ -105,26 +108,38 @@ func newHandler(cfg Config, b Backend, reg *live.Registry) *handler {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if v := recover(); v != nil {
+			if v == http.ErrAbortHandler {
+				panic(v)
+			}
+			slog.Error("handler panic", "panic", v)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}()
 	hd := w.Header()
 	hd.Set("X-Content-Type-Options", "nosniff")
 	hd.Set("Referrer-Policy", "no-referrer")
-	if r.Method != http.MethodGet {
-		notFound(w)
-		return
-	}
+	hd.Set("X-Frame-Options", "DENY")
+	hd.Set("Content-Security-Policy", baseCSP)
+	hd.Set("Cross-Origin-Opener-Policy", "same-origin")
+	hd.Set("Cross-Origin-Resource-Policy", "same-origin")
+	hd.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+	hd.Set("Cache-Control", "no-store")
+	static := r.Method == http.MethodGet || r.Method == http.MethodHead
 	switch {
-	case strings.HasPrefix(r.URL.Path, "/s/"):
+	case static && strings.HasPrefix(r.URL.Path, "/s/"):
 		if !validToken(r.URL.Path[3:]) {
 			notFound(w)
 			return
 		}
 		h.serveIndex(w, r)
-	case strings.HasPrefix(r.URL.Path, "/assets/"):
+	case static && strings.HasPrefix(r.URL.Path, "/assets/"):
 		h.serveAsset(w, r, r.URL.Path[1:])
-	case strings.HasPrefix(r.URL.Path, "/ws/"):
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/ws/"):
 		token := r.URL.Path[4:]
 		if !validToken(token) {
-			h.lim.fail(h.clientIP(r))
+			h.lim.fail(limiterKey(h.clientIP(r)))
 			notFound(w)
 			return
 		}
@@ -135,11 +150,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func validToken(t string) bool {
-	return t != "" && len(t) <= maxTokenLen && !strings.Contains(t, "/")
+	if t == "" || len(t) > maxTokenLen {
+		return false
+	}
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func notFound(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNotFound)
 }
 
@@ -157,8 +180,6 @@ func (h *handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	hd := w.Header()
 	hd.Set("Content-Security-Policy", staticCSP)
-	hd.Set("Cache-Control", "no-store")
-	hd.Set("X-Frame-Options", "DENY")
 	hd.Set("Content-Type", "text/html; charset=utf-8")
 	http.ServeContent(w, r, "index.html", time.Time{}, rs)
 }
@@ -182,25 +203,25 @@ func (h *handler) serveAsset(w http.ResponseWriter, r *http.Request, name string
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Header().Set("X-Frame-Options", "DENY")
 	http.ServeContent(w, r, rel, time.Time{}, rs)
 }
 
+// clientIP trusts RealIPHeader only when the TCP peer is a configured proxy,
+// otherwise any direct client could pick its own identity.
 func (h *handler) clientIP(r *http.Request) string {
-	raw := ""
-	if h.cfg.RealIPHeader != "" {
+	peer := peerAddr(r.RemoteAddr)
+	a := peer
+	if h.cfg.RealIPHeader != "" && trusted(h.cfg.TrustedProxies, peer) {
 		if v := r.Header.Get(h.cfg.RealIPHeader); v != "" {
-			raw = strings.TrimSpace(v[strings.LastIndexByte(v, ',')+1:])
+			if p, err := netip.ParseAddr(strings.TrimSpace(v[strings.LastIndexByte(v, ',')+1:])); err == nil {
+				a = p.WithZone("").Unmap()
+			}
 		}
 	}
-	if raw == "" {
-		raw, _, _ = net.SplitHostPort(r.RemoteAddr)
-	}
-	a, err := netip.ParseAddr(raw)
-	if err != nil {
+	if !a.IsValid() {
 		return "unknown"
 	}
-	return a.Unmap().String()
+	return a.String()
 }
 
 func limiterKey(ip string) string {
@@ -245,13 +266,6 @@ func (h *handler) serveWS(w http.ResponseWriter, r *http.Request, token string) 
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	select {
-	case h.sem <- struct{}{}:
-		defer func() { <-h.sem }()
-	default:
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
 
 	rctx, rcancel := context.WithTimeout(r.Context(), resolveWait)
 	link, vm, err := h.b.Resolve(rctx, token)
@@ -259,6 +273,24 @@ func (h *handler) serveWS(w http.ResponseWriter, r *http.Request, token string) 
 	if err != nil || !link.Active(time.Now()) {
 		h.lim.fail(key)
 		notFound(w)
+		return
+	}
+
+	h.mu.Lock()
+	if h.closing {
+		h.mu.Unlock()
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	h.wg.Add(1)
+	h.mu.Unlock()
+	defer h.wg.Done()
+
+	select {
+	case h.sem <- struct{}{}:
+		defer func() { <-h.sem }()
+	default:
+		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 
@@ -283,10 +315,21 @@ func (h *handler) serveWS(w http.ResponseWriter, r *http.Request, token string) 
 		slog.Info("session ended", "session", sess.ID, "reason", reason)
 	}()
 
+	// A revoke between Resolve and Start would not have found this session to kill.
+	rctx, rcancel = context.WithTimeout(context.Background(), resolveWait)
+	_, _, err = h.b.Resolve(rctx, token)
+	rcancel()
+	if err != nil {
+		reason = "revoked"
+		notFound(w)
+		return
+	}
+
 	// Origin was verified above, so the library's own same-host check is skipped.
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols:       []string{"binary"},
 		InsecureSkipVerify: true,
+		CompressionMode:    websocket.CompressionDisabled,
 	})
 	if err != nil {
 		reason = "upgrade_failed"
@@ -307,31 +350,36 @@ func (h *handler) serveWS(w http.ResponseWriter, r *http.Request, token string) 
 		closeWS(ws, websocket.StatusPolicyViolation, genericClose)
 		return
 	}
-	reason = h.bridge(ctx, cancel, ws, nc, vmConn)
+	limit, limitReason := h.cfg.MaxSession, reasonMaxSes
+	if left := time.Until(link.ExpiresAt); left < limit {
+		limit, limitReason = max(left, time.Second), reasonExpired
+	}
+	reason = h.bridge(ctx, cancel, ws, nc, vmConn, limit, limitReason)
 }
 
+// Close waits for the peer's close frame, which the library bounds to a few seconds.
 func closeWS(ws *websocket.Conn, code websocket.StatusCode, msg string) {
-	done := make(chan struct{})
-	go func() {
-		ws.Close(code, msg)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(closeWait):
-		ws.CloseNow()
-	}
+	ws.Close(code, msg)
 }
+
+// activity tracks the last traffic on the monotonic clock, so wall clock jumps cannot fake or hide idleness.
+type activity struct {
+	base time.Time
+	last atomic.Int64
+}
+
+func (a *activity) touch()                 { a.last.Store(int64(time.Since(a.base))) }
+func (a *activity) idleFor() time.Duration { return time.Since(a.base) - time.Duration(a.last.Load()) }
 
 type touchConn struct {
 	net.Conn
-	last *atomic.Int64
+	act *activity
 }
 
 func (c touchConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
-		c.last.Store(time.Now().UnixNano())
+		c.act.touch()
 	}
 	return n, err
 }
@@ -339,40 +387,54 @@ func (c touchConn) Read(p []byte) (int, error) {
 func (c touchConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
-		c.last.Store(time.Now().UnixNano())
+		c.act.touch()
 	}
 	return n, err
 }
 
-func (h *handler) bridge(ctx context.Context, cancel context.CancelCauseFunc, ws *websocket.Conn, nc, vm net.Conn) string {
-	var last atomic.Int64
-	last.Store(time.Now().UnixNano())
-	a, b := touchConn{nc, &last}, touchConn{vm, &last}
+func goSafe(f func()) {
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				slog.Error("goroutine panic", "panic", v)
+			}
+		}()
+		f()
+	}()
+}
+
+func (h *handler) bridge(ctx context.Context, cancel context.CancelCauseFunc, ws *websocket.Conn, nc, vm net.Conn, limit time.Duration, limitReason string) string {
+	act := &activity{base: time.Now()}
+	a, b := touchConn{nc, act}, touchConn{vm, act}
 
 	var wg sync.WaitGroup
 	cp := func(dst, src net.Conn) {
 		defer wg.Done()
+		defer cancel(errors.New(reasonClosed))
 		io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, make([]byte, copyBufSize))
-		cancel(errors.New(reasonClosed))
 	}
-	wg.Add(2)
-	go cp(b, a)
-	go cp(a, b)
-
-	wg.Add(1)
-	go func() {
+	wg.Add(3)
+	goSafe(func() { cp(b, a) })
+	goSafe(func() { cp(a, b) })
+	goSafe(func() {
 		defer wg.Done()
+		defer cancel(errors.New(reasonClosed))
 		idle := h.cfg.IdleTimeout
 		tick := time.NewTicker(max(idle/4, time.Millisecond))
 		defer tick.Stop()
 		ping := time.NewTicker(h.pingInt)
 		defer ping.Stop()
+		deadline := time.NewTimer(limit)
+		defer deadline.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-deadline.C:
+				cancel(errors.New(limitReason))
+				return
 			case <-tick.C:
-				if time.Since(time.Unix(0, last.Load())) > idle {
+				if act.idleFor() > idle {
 					cancel(errors.New(reasonIdle))
 					return
 				}
@@ -386,7 +448,7 @@ func (h *handler) bridge(ctx context.Context, cancel context.CancelCauseFunc, ws
 				}
 			}
 		}
-	}()
+	})
 
 	<-ctx.Done()
 	vm.Close()

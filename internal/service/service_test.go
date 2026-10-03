@@ -139,12 +139,24 @@ func TestTokenNotStoredInPlaintext(t *testing.T) {
 }
 
 func TestTokenInputCap(t *testing.T) {
-	long := strings.Repeat("a", 128)
-	if string(hashToken(long+"x")) != string(hashToken(long+"y")) {
-		t.Fatal("input past cap should be ignored")
+	e := setup(t)
+	long := strings.Repeat("a", 129)
+	if _, _, err := e.svc.Resolve(context.Background(), long); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("got %v", err)
 	}
-	if string(hashToken(long[:127])) == string(hashToken(long)) {
-		t.Fatal("input under cap must matter")
+}
+
+func TestAddVMRejectsBannedIPs(t *testing.T) {
+	e := setup(t)
+	for _, h := range []string{"169.254.169.254", "0.0.0.0", "::", "fe80::1", "::ffff:169.254.169.254", "224.0.0.1"} {
+		if _, err := e.svc.AddVM(context.Background(), "x", h, 5900, ""); err == nil {
+			t.Fatalf("accepted %s", h)
+		}
+	}
+	for _, h := range []string{"192.168.1.5", "10.1.2.3", "127.0.0.1"} {
+		if _, err := e.svc.AddVM(context.Background(), "x", h, 5900, ""); err != nil {
+			t.Fatalf("rejected %s: %v", h, err)
+		}
 	}
 }
 

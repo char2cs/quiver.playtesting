@@ -61,49 +61,93 @@ func serve(args []string) error {
 	publicHost := fs.String("public-host", envOr("QP_PUBLIC_HOST", "playtesting.quiver.ar"), "public hostname, used for the Origin check")
 	data := fs.String("data", envOr("QP_DATA", "./data"), "data directory (database and admin socket)")
 	realIP := fs.String("real-ip-header", envOr("QP_REAL_IP_HEADER", "CF-Connecting-IP"), "header carrying the client IP, empty to use the socket peer")
+	proxies := fs.String("trusted-proxies", envOr("QP_TRUSTED_PROXIES", "cloudflare"), "peers allowed to set the real IP header: comma separated CIDRs/IPs, 'cloudflare', or 'none'")
 	maxConns := fs.Int("max-conns", 50, "max concurrent sessions")
 	idle := fs.Duration("idle-timeout", 15*time.Minute, "end sessions with no traffic for this long")
+	maxSession := fs.Duration("max-session", 4*time.Hour, "hard cap on a single session")
+	retention := fs.Duration("log-retention", 90*24*time.Hour, "delete session history older than this, 0 keeps everything")
 	fs.Parse(args)
 
-	if err := os.MkdirAll(*data, 0o700); err != nil {
+	trusted, err := gateway.ParseTrustedProxies(*proxies)
+	if err != nil {
+		return err
+	}
+	if err := admin.PrepareDir(*data); err != nil {
 		return err
 	}
 	st, err := store.Open(filepath.Join(*data, "quiver.db"))
 	if err != nil {
 		return err
 	}
+	defer st.Close()
 	reg := live.New()
 	svc := service.New(st, reg)
 
 	srv := gateway.NewServer(gateway.Config{
-		Listen:       *listen,
-		PublicHost:   *publicHost,
-		RealIPHeader: *realIP,
-		MaxConns:     *maxConns,
-		IdleTimeout:  *idle,
+		Listen:         *listen,
+		PublicHost:     *publicHost,
+		RealIPHeader:   *realIP,
+		TrustedProxies: trusted,
+		MaxConns:       *maxConns,
+		IdleTimeout:    *idle,
+		MaxSession:     *maxSession,
 	}, svc, reg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if *retention > 0 {
+		go pruneLoop(ctx, st, *retention)
+	}
+
 	errc := make(chan error, 2)
+	adminDone := make(chan struct{})
 	go func() {
-		slog.Info("gateway listening", "addr", srv.Addr)
+		slog.Info("gateway listening", "addr", srv.Addr, "trusted_proxies", len(trusted))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
 	}()
-	go func() { errc <- admin.Serve(ctx, filepath.Join(*data, "admin.sock"), svc) }()
+	go func() {
+		defer close(adminDone)
+		if err := admin.Serve(ctx, filepath.Join(*data, "admin.sock"), svc); err != nil {
+			errc <- err
+		}
+	}()
 
+	var runErr error
 	select {
 	case <-ctx.Done():
-	case err := <-errc:
+		slog.Info("shutting down")
+	case runErr = <-errc:
 		stop()
-		return err
 	}
-	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdown)
+	if err := srv.Shutdown(shutdown); err != nil && runErr == nil {
+		runErr = err
+	}
+	<-adminDone
+	return runErr
+}
+
+func pruneLoop(ctx context.Context, st *store.Store, keep time.Duration) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if n, err := st.PruneSessionLog(pctx, time.Now().Add(-keep)); err != nil {
+			slog.Warn("session log prune failed", "err", err)
+		} else if n > 0 {
+			slog.Info("session log pruned", "rows", n)
+		}
+		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 func runTUI(args []string) error {

@@ -78,6 +78,10 @@ func (r *Registry) KillByVM(vmID int64, reason string) {
 	r.killWhere(reason, func(s core.Session) bool { return s.VMID == vmID })
 }
 
+func (r *Registry) KillAll(reason string) {
+	r.killWhere(reason, func(core.Session) bool { return true })
+}
+
 func (r *Registry) killWhere(reason string, match func(core.Session) bool) {
 	r.mu.Lock()
 	var cancels []context.CancelCauseFunc

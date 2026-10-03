@@ -383,3 +383,46 @@ func TestShutdownRemovesSocket(t *testing.T) {
 		t.Fatal("socket not removed")
 	}
 }
+
+func TestPrepareDirTightensAndRefuses(t *testing.T) {
+	d := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareDir(d); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(d); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	os.Symlink(d, link)
+	if err := PrepareDir(link); err == nil {
+		t.Fatal("symlinked data dir accepted")
+	}
+	f := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(f, nil, 0o600)
+	if err := PrepareDir(f); err == nil {
+		t.Fatal("file accepted")
+	}
+}
+
+func TestServeTightensLooseDir(t *testing.T) {
+	d := t.TempDir()
+	os.Chmod(d, 0o755)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, filepath.Join(d, "a.sock"), &fake{}) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(d, "a.sock")); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fi, _ := os.Stat(d); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("dir mode %v", fi.Mode())
+	}
+	cancel()
+	<-done
+}

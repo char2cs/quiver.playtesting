@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"syscall"
 	"time"
 )
 
@@ -19,7 +21,38 @@ const (
 	secVNCAuth       = 2
 )
 
-var serverVersion = []byte("RFB 003.008\n")
+var (
+	serverVersion = []byte("RFB 003.008\n")
+	version37     = []byte("RFB 003.007\n")
+)
+
+var metadataV6 = netip.MustParseAddr("fd00:ec2::254")
+
+// CheckIP rejects addresses a VNC target must never have: unspecified, link-local
+// (cloud metadata lives at 169.254.169.254), multicast and broadcast. RFC1918 and
+// loopback stay allowed because VMs sit on the LAN.
+func CheckIP(ip netip.Addr) error {
+	ip = ip.Unmap()
+	if !ip.IsValid() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() ||
+		ip == netip.AddrFrom4([4]byte{255, 255, 255, 255}) || ip == metadataV6 {
+		return errors.New("rfb: target address not allowed")
+	}
+	return nil
+}
+
+// checkDial runs on the resolved address of every connection attempt, so DNS
+// rebinding cannot swap in a banned address after validation.
+func checkDial(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return errors.New("rfb: target address not allowed")
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return errors.New("rfb: target address not allowed")
+	}
+	return CheckIP(ip)
+}
 
 // Dial connects to addr and authenticates, returning the conn right before ClientInit.
 func Dial(ctx context.Context, addr, password string) (net.Conn, error) {
@@ -29,7 +62,7 @@ func Dial(ctx context.Context, addr, password string) (net.Conn, error) {
 	}
 	dctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	var d net.Dialer
+	d := net.Dialer{Control: checkDial}
 	conn, err := d.DialContext(dctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("rfb dial: %w", err)
@@ -62,7 +95,12 @@ func clientHandshake(conn net.Conn, password string, deadline time.Time) error {
 	if string(ver[:8]) != "RFB 003." || ver[11] != '\n' || ver[8] != '0' || ver[9] != '0' || ver[10] < '7' || ver[10] > '9' {
 		return errors.New("rfb: unsupported server version")
 	}
-	if _, err := conn.Write(serverVersion); err != nil {
+	minor := ver[10]
+	reply := serverVersion
+	if minor == '7' {
+		reply = version37
+	}
+	if _, err := conn.Write(reply); err != nil {
 		return err
 	}
 	var n [1]byte
@@ -106,6 +144,9 @@ func clientHandshake(conn net.Conn, password string, deadline time.Time) error {
 			return err
 		}
 	}
+	if chosen == secNone && minor == '7' {
+		return nil
+	}
 	var res [4]byte
 	if _, err := io.ReadFull(conn, res[:]); err != nil {
 		return err
@@ -116,8 +157,10 @@ func clientHandshake(conn net.Conn, password string, deadline time.Time) error {
 	return nil
 }
 
-// VNCResponse computes the VNC auth response: DES-ECB of the challenge with the
-// bit-reversed password (first 8 bytes, zero padded) as key.
+// VNCResponse computes the VNC auth response. DES-ECB is mandated by the VNC
+// authentication protocol (RFC 6143 7.2.2), it is not our choice and it is weak,
+// so VM passwords only gate access on a trusted LAN. The key is the bit-reversed
+// password (first 8 bytes, zero padded).
 func VNCResponse(password string, challenge [16]byte) ([16]byte, error) {
 	var key [8]byte
 	copy(key[:], password)

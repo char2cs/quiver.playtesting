@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -135,5 +136,89 @@ func TestAcceptRejects(t *testing.T) {
 func TestAcceptEOF(t *testing.T) {
 	if err := acceptWith(t, func(c net.Conn) {}); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestCheckIP(t *testing.T) {
+	bad := []string{"169.254.169.254", "0.0.0.0", "::", "fe80::1", "::ffff:169.254.169.254", "224.0.0.1", "ff02::1", "255.255.255.255", "fd00:ec2::254"}
+	for _, s := range bad {
+		if rfb.CheckIP(netip.MustParseAddr(s)) == nil {
+			t.Errorf("%s allowed", s)
+		}
+	}
+	for _, s := range []string{"192.168.1.10", "10.0.0.5", "172.16.3.3", "127.0.0.1", "8.8.8.8", "::1"} {
+		if err := rfb.CheckIP(netip.MustParseAddr(s)); err != nil {
+			t.Errorf("%s rejected", s)
+		}
+	}
+}
+
+func TestDialRefusesBannedAddress(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, a := range []string{"169.254.169.254:80", "0.0.0.0:5900", "[fe80::1]:5900"} {
+		start := time.Now()
+		if c, err := rfb.Dial(ctx, a, ""); err == nil {
+			c.Close()
+			t.Fatalf("dialed %s", a)
+		}
+		if time.Since(start) > time.Second {
+			t.Fatalf("%s: should fail before connecting", a)
+		}
+	}
+}
+
+func fakeServer(t *testing.T, script func(c net.Conn)) string {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			script(c)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func TestDialVersion37(t *testing.T) {
+	var got [12]byte
+	addr := fakeServer(t, func(c net.Conn) {
+		c.Write([]byte("RFB 003.007\n"))
+		io.ReadFull(c, got[:])
+		c.Write([]byte{1, 1})
+		io.ReadFull(c, make([]byte, 1))
+	})
+	c, err := rfb.Dial(context.Background(), addr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	if string(got[:]) != "RFB 003.007\n" {
+		t.Fatalf("client answered %q", got[:])
+	}
+}
+
+func TestDialMalformedServers(t *testing.T) {
+	scripts := map[string]func(c net.Conn){
+		"refused":      func(c net.Conn) { c.Write([]byte("RFB 003.008\n\x00")) },
+		"short types":  func(c net.Conn) { c.Write([]byte("RFB 003.008\n\x05\x02")) },
+		"unknown type": func(c net.Conn) { c.Write([]byte("RFB 003.008\n\x01\x63")) },
+		"short chal": func(c net.Conn) {
+			c.Write([]byte("RFB 003.008\n\x01\x02abc"))
+		},
+		"v3.3": func(c net.Conn) { c.Write([]byte("RFB 003.003\n")) },
+	}
+	for name, sc := range scripts {
+		addr := fakeServer(t, sc)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if c, err := rfb.Dial(ctx, addr, "pw"); err == nil {
+			c.Close()
+			t.Fatalf("%s: accepted", name)
+		}
+		cancel()
 	}
 }

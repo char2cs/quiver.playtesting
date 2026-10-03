@@ -251,3 +251,36 @@ func TestForeignKeysOn(t *testing.T) {
 	}
 	var _ sql.DB
 }
+
+func TestPruneSessionLog(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	now := time.Now()
+	old := core.Session{ID: "old", StartedAt: now.Add(-100 * 24 * time.Hour)}
+	if err := s.LogSession(ctx, old, now.Add(-100*24*time.Hour), "closed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LogSession(ctx, core.Session{ID: "new", StartedAt: now}, now, "closed"); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.PruneSessionLog(ctx, now.Add(-90*24*time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("pruned %d %v", n, err)
+	}
+}
+
+func TestWALFilesAreOwnerOnly(t *testing.T) {
+	s, p := open(t)
+	if err := s.LogSession(context.Background(), core.Session{ID: "x", StartedAt: time.Now()}, time.Now(), "closed"); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		fi, err := os.Stat(p + suffix)
+		if err != nil {
+			continue
+		}
+		if fi.Mode().Perm()&0o077 != 0 {
+			t.Errorf("%s mode %v", suffix, fi.Mode())
+		}
+	}
+}
