@@ -37,3 +37,7 @@ Local end to end test VM: see `testenv/README.md`. Design: `docs/superpowers/spe
 - State lives in `${INSTALL_PATH}/data` (database and admin socket). Uninstall keeps it.
 - Operate it from the host shell: `cd <install path> && ./quiver-playtest tui --data ./data`.
 - Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which publishes the tarballs the arrow downloads. Bump the URLs and `version` in `ARROW.md` to match the tag. The repository must be public for the arrow to download release assets without credentials.
+
+## Nightly builds
+
+Every push to `main` runs `.github/workflows/nightly.yml`: vet, race tests, then it replaces the `nightly` prerelease with fresh `linux/amd64` and `linux/arm64` tarballs and `checksums.txt`. Asset names are stable (`quiver-playtest_nightly_linux_<arch>.tar.gz`), so a fixed URL always serves the latest main. Stable releases still come from `vX.Y.Z` tags.
