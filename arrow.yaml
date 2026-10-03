@@ -1,0 +1,115 @@
+schema: "arrow@v0"
+
+metadata:
+  name: char2cs.quiver-playtesting
+  description: Playtesting gateway that serves one VM per link to the browser over noVNC, without exposing VNC ports
+  version: 0.1.0
+  license: MIT
+  url: https://github.com/char2cs/quiver-playtesting
+  quiver: github.com/char2cs/quiver-playtesting
+  maintainers:
+    - name: char2cs
+      url: https://char2cs.net
+  tags:
+    - playtesting
+    - vnc
+    - novnc
+    - gateway
+
+variables:
+  - name: PUBLIC_HOST
+    type: string
+    default: playtesting.quiver.ar
+    description: Public hostname playtesters use, checked against the Origin header
+  - name: REAL_IP_HEADER
+    type: string
+    default: CF-Connecting-IP
+    description: Header carrying the real client IP behind the proxy, empty to use the socket peer
+  - name: MAX_SESSIONS
+    type: number
+    default: "50"
+    description: Maximum concurrent playtesting sessions
+    min: 1
+    max: 1000
+  - name: IDLE_TIMEOUT
+    type: string
+    default: 15m
+    description: End a session with no traffic for this long, as a Go duration
+
+netbridge:
+  - name: GATEWAY_PORT
+    default: 8480
+    protocol: tcp
+    required: true
+
+targets:
+  "linux/*":
+    requirements:
+      cpu_cores: 1
+      ram_gb: 1
+      disk_gb: 1
+
+    lifecycle:
+      install:
+        - type: fetch
+          url:
+            default: https://github.com/char2cs/quiver-playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_amd64.tar.gz
+            linux/arm64: https://github.com/char2cs/quiver-playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_arm64.tar.gz
+          to: ./quiver-playtest.tar.gz
+          title: Downloading quiver-playtest
+          timeout: 5m
+
+        - type: run
+          command: tar -xzf ./quiver-playtest.tar.gz quiver-playtest
+          title: Extracting quiver-playtest
+          timeout: 1m
+
+        - type: run
+          command: chmod 0755 ./quiver-playtest
+          title: Setting executable bit
+          timeout: 10s
+
+        - type: run
+          command: rm -f ./quiver-playtest.tar.gz
+          title: Cleaning up
+          timeout: 10s
+          exit_on_failure: false
+
+      update:
+        - type: fetch
+          url:
+            default: https://github.com/char2cs/quiver-playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_amd64.tar.gz
+            linux/arm64: https://github.com/char2cs/quiver-playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_arm64.tar.gz
+          to: ./quiver-playtest.tar.gz
+          title: Downloading quiver-playtest
+          timeout: 5m
+
+        - type: run
+          command: tar -xzf ./quiver-playtest.tar.gz quiver-playtest
+          title: Replacing quiver-playtest
+          timeout: 1m
+
+        - type: run
+          command: rm -f ./quiver-playtest.tar.gz
+          title: Cleaning up
+          timeout: 10s
+          exit_on_failure: false
+
+      execute:
+        - type: run
+          command: ./quiver-playtest serve --listen 0.0.0.0:${GATEWAY_PORT} --public-host ${PUBLIC_HOST} --real-ip-header ${REAL_IP_HEADER} --max-conns ${MAX_SESSIONS} --idle-timeout ${IDLE_TIMEOUT} --data ${INSTALL_PATH}/data
+          title: Starting playtesting gateway
+          timeout: 30s
+
+      stop:
+        - type: signal
+          signal: graceful
+          timeout: 15s
+          exit_on_failure: false
+
+      uninstall:
+        - type: run
+          command: rm -f ./quiver-playtest ./quiver-playtest.tar.gz
+          title: Removing binary (data directory is kept)
+          timeout: 30s
+          exit_on_failure: false
