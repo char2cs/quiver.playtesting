@@ -1,3 +1,44 @@
+# Quiver Playtesting
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rabbytesoftware/quiver.core/develop/.github/quiver.svg" alt="Quiver" width="450" />
+  <br/>
+  <em>Let people try your game from a link. Nothing else gets exposed.</em>
+</p>
+
+## What it does
+
+Quiver Playtesting is a small gateway that puts a test machine in a browser tab. You give a playtester a link. They open it and see a noVNC desktop of one virtual machine, and run their session there. They install nothing and never learn where the machine is.
+
+Each link is tied to one VM, expires on its own, and allows one live session at a time. Close the tab and the link can be used again until it expires.
+
+## What it does not do
+
+- It does not expose VNC. The VNC ports stay on your LAN. The gateway connects to them itself and signs in with the VNC password, which playtesters never see.
+- It does not offer clipboard sharing or file transfer, only the screen, keyboard and mouse.
+- It has no web admin. You manage everything from a terminal on the server, so there is no login page to attack.
+
+## How it works
+
+1. You run the arrow. It listens on one port and talks plain HTTP, so put a proxy such as Cloudflare in front for TLS and open only that port on your network.
+2. In the admin TUI you add a VM (host, port, VNC password) and create a link for a playtester. The TUI shows the link once.
+3. The playtester opens `https://<your host>/s/<token>`. The gateway checks the token, connects to the VM and relays the screen over a WebSocket.
+4. You can watch live sessions, flag one that is acting up, or drop it, which closes the connection immediately and can revoke the link.
+
+The gateway only believes the client IP header from your proxy's addresses (Cloudflare's by default), so nobody can dodge a ban by faking it. It refuses to connect to link-local and metadata addresses, caps a session at four hours, and shuts down cleanly on stop. Tokens are random and stored only as hashes. A bad token, an expired link and a busy VM all look the same from outside, and repeated bad guesses get an address banned for a while.
+
+## Running the TUI
+
+The gateway runs as the arrow's service. To manage it, open a shell on the same machine:
+
+```
+cd <install path>
+./quiver-playtest tui --data ./data --public-url https://<your host>
+```
+
+Your data (VMs, links, session history) lives in the `data` folder and survives updates and uninstalls.
+
+```arrow
 schema: "arrow@v0"
 
 metadata:
@@ -10,6 +51,9 @@ metadata:
   maintainers:
     - name: char2cs
       url: https://char2cs.net
+  media:
+    icon: "https://raw.githubusercontent.com/rabbytesoftware/quiver.core/develop/docs/quiver-icon.svg"
+    banner: "https://raw.githubusercontent.com/rabbytesoftware/quiver.core/develop/docs/quiver-banner.svg"
   tags:
     - playtesting
     - vnc
@@ -25,6 +69,14 @@ variables:
     type: string
     default: CF-Connecting-IP
     description: Header carrying the real client IP behind the proxy, empty to use the socket peer
+  - name: TRUSTED_PROXIES
+    type: string
+    default: cloudflare
+    description: Proxies whose real-IP header is believed, as CIDRs or the word cloudflare. Use none to ignore the header
+  - name: MAX_SESSION
+    type: string
+    default: 4h
+    description: Hard cap on one session's length, as a Go duration
   - name: MAX_SESSIONS
     type: number
     default: "50"
@@ -97,7 +149,7 @@ targets:
 
       execute:
         - type: run
-          command: ./quiver-playtest serve --listen 0.0.0.0:${GATEWAY_PORT} --public-host ${PUBLIC_HOST} --real-ip-header ${REAL_IP_HEADER} --max-conns ${MAX_SESSIONS} --idle-timeout ${IDLE_TIMEOUT} --data ${INSTALL_PATH}/data
+          command: ./quiver-playtest serve --listen 0.0.0.0:${GATEWAY_PORT} --public-host ${PUBLIC_HOST} --real-ip-header ${REAL_IP_HEADER} --trusted-proxies ${TRUSTED_PROXIES} --max-session ${MAX_SESSION} --max-conns ${MAX_SESSIONS} --idle-timeout ${IDLE_TIMEOUT} --data ${INSTALL_PATH}/data
           title: Starting playtesting gateway
           timeout: 30s
 
@@ -113,3 +165,4 @@ targets:
           title: Removing binary (data directory is kept)
           timeout: 30s
           exit_on_failure: false
+```
