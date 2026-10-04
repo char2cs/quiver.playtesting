@@ -421,3 +421,46 @@ func TestLimiterKeyGroupsIPv6(t *testing.T) {
 		t.Fatal("same /64 must share key")
 	}
 }
+
+func TestContinuousUpdatesEndToEnd(t *testing.T) {
+	e := setup(t, Config{ContinuousUpdates: true})
+	e.b.add("tok1", 1, rfbtest.Server(t, "pw"), "pw")
+	ws, _, err := e.dial(t, "tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := handshake(t, ws)
+	nc.Write([]byte{2, 0, 0, 2, 0, 0, 0, 0, 0xff, 0xff, 0xfe, 0xc7})
+	got := make([]byte, 1)
+	if _, err := io.ReadFull(nc, got); err != nil || got[0] != 150 {
+		t.Fatalf("want EndOfContinuousUpdates, got %v %v", got, err)
+	}
+	key := []byte{4, 1, 0, 0, 0, 0, 0, 'a'}
+	ptr := []byte{5, 1, 0, 10, 0, 20}
+	nc.Write(append(append([]byte{3, 1, 0, 0, 0, 0, 0, 1, 0, 1}, key...), ptr...))
+	echo := make([]byte, len(key)+len(ptr)+len([]byte{2, 0, 0, 1, 0, 0, 0, 0}))
+	if _, err := io.ReadFull(nc, echo); err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]byte{2, 0, 0, 1, 0, 0, 0, 0}, key...), ptr...)
+	if string(echo) != string(want) {
+		t.Fatalf("vm saw %v want %v", echo, want)
+	}
+	nc.Close()
+	waitLog(t, e.b)
+}
+
+func TestContinuousUpdatesBadClientMessage(t *testing.T) {
+	e := setup(t, Config{ContinuousUpdates: true})
+	e.b.add("tok1", 1, rfbtest.Server(t, "pw"), "pw")
+	ws, _, err := e.dial(t, "tok1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := handshake(t, ws)
+	nc.Write([]byte{99})
+	io.Copy(io.Discard, nc)
+	if r := waitLog(t, e.b); r != reasonBadRFB {
+		t.Fatalf("reason %q", r)
+	}
+}

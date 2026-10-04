@@ -32,7 +32,15 @@ func Dial(ctx context.Context, addr, password string) (net.Conn, error)
 // requires a 3.8 client version, offers only security type None, replies SecurityResult OK. Handshake deadline 10s, strict reads.
 func Accept(conn net.Conn) error
 ```
-After both succeed, the gateway copies bytes both ways (ClientInit/ServerInit and everything after pass through).
+```go
+// Relay takes over after both handshakes (the next bytes are ClientInit) and returns when either side ends or ctx is done; both conns are closed on return.
+// It forwards ClientInit/ServerInit, parses browser messages with a strict whitelist (anything else returns an error wrapping rfb.ErrProtocol),
+// strips pseudo-encoding -313 from SetEncodings, drops ClientCutText, and when the browser offered -313 it injects one EndOfContinuousUpdates byte (150)
+// before any VM byte, swallows incremental FramebufferUpdateRequests and pumps its own incremental requests to the VM, paced on the VM's replies plus a slow heartbeat (x11vnc goes silent when flooded with unanswered requests). VM to browser bytes are copied opaquely.
+func Relay(ctx context.Context, client, vm net.Conn, opts RelayOptions) error
+type RelayOptions struct { PumpInterval, PumpSettle, PumpMinGap, AdvertiseWait time.Duration; PumpWriter io.Writer } // zero values mean 60ms heartbeat, 3ms, 8ms, 5s, the vm conn
+```
+With `Config.ContinuousUpdates` the gateway runs `rfb.Relay` after both succeed; without it, it copies bytes both ways untouched (ClientInit/ServerInit and everything after pass through).
 
 ## internal/service  (implements core.Service + gateway.Backend)
 ```go
@@ -48,6 +56,7 @@ type Config struct {
     Listen, PublicHost, RealIPHeader string
     TrustedProxies []netip.Prefix // only these TCP peers may set RealIPHeader; nil trusts nobody
     MaxConns int; IdleTimeout, MaxSession time.Duration; MaxOpenConns, PerPeerConns int
+    ContinuousUpdates bool // serve RFB ContinuousUpdates via rfb.Relay; false copies raw bytes
 }
 type Backend interface {
     Resolve(ctx context.Context, token string) (core.Link, core.VM, error)
