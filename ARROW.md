@@ -27,6 +27,19 @@ Each link is tied to one VM, expires on its own, and allows one live session at 
 
 The gateway only believes the client IP header from your proxy's addresses (Cloudflare's by default), so nobody can dodge a ban by faking it. It refuses to connect to link-local and metadata addresses, caps a session at four hours, and shuts down cleanly on stop. Tokens are random and stored only as hashes. A bad token, an expired link and a busy VM all look the same from outside, and repeated bad guesses get an address banned for a while.
 
+## Running it headless
+
+On a machine with only the Quiver daemon (no desktop app):
+
+```
+quiver arrow add github.com/char2cs/quiver.playtesting
+quiver install   github.com/char2cs/quiver.playtesting
+quiver run       github.com/char2cs/quiver.playtesting --detach --data GATEWAY_PORT=8480
+quiver stop      github.com/char2cs/quiver.playtesting
+```
+
+Quiver picks a random free port for `GATEWAY_PORT` unless you pin it with `--data`, so pin it to the port your router and proxy forward. `--detach` returns immediately; without it `quiver run` stays attached for as long as the gateway runs.
+
 ## Running the TUI
 
 The gateway runs as the arrow's service, and Quiver puts a `quiver-playtest` command in `~/.quiver/bin` (run `quiver path setup` once if that folder is not on your PATH). To manage the gateway, open a shell on the same machine:
@@ -155,7 +168,6 @@ targets:
         - type: run
           command: ./quiver-playtest serve --listen 0.0.0.0:${GATEWAY_PORT} --public-host ${PUBLIC_HOST} --real-ip-header ${REAL_IP_HEADER} --trusted-proxies ${TRUSTED_PROXIES} --max-session ${MAX_SESSION} --max-conns ${MAX_SESSIONS} --idle-timeout ${IDLE_TIMEOUT} --data ${INSTALL_PATH}/data
           title: Starting playtesting gateway
-          timeout: 30s
 
       stop:
         - type: signal
