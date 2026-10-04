@@ -6,6 +6,7 @@ Every playtest session is recorded to an mp4 on the gateway host, from the momen
 
 ## Non-goals
 
+- No consent flow beyond the header notice (no popup, no acceptance step).
 - No audio, no input overlay (keystrokes, cursor trail), no live viewing of the recording.
 - No playback, download or deletion UI. The operator reads the files from disk.
 - No per-link on/off switch: when recording is enabled, every session is recorded.
@@ -49,6 +50,12 @@ The gateway host is small (1 vCPU, about 15 GB free disk), so:
 - Recording stops when free space under the recordings dir drops below `--recordings-min-free` (default 2 GiB). The session continues.
 - `--recordings-retention` (default 30 days, 0 keeps everything) deletes older files and empty folders, using the same prune loop pattern as the session log.
 
+### Notice to playtesters
+
+The page header shows a short notice, "This session is recorded", with a small red dot, next to the "Playtesting" label. It is plain text in the existing header style (`web/static/index.html`, `style.css`), with no popup and no click needed.
+
+The notice must be true, so the gateway only shows it while recording is actually available. `index.html` contains a placeholder comment where the notice goes, and `serveIndex` fills it in when recording is enabled and ffmpeg was found at startup. When recording is off the header is unchanged. It still appears when the concurrent cap is reached, because the page cannot know that in advance.
+
 ### Visibility
 
 - `core.Session` gets `Recording bool`, set while a recording is active.
@@ -85,13 +92,10 @@ At startup, if recordings are on and ffmpeg is not found or not executable, the 
 - End to end: fake VNC server, real ffmpeg, session start and stop, then `ffprobe` checks that the mp4 exists, has the right size and a duration within tolerance. Skipped when ffmpeg is absent.
 - Failure isolation: ffmpeg missing, ffmpeg crashing mid-session and a capture error each leave the session running.
 - Limits: concurrent cap, low disk space, retention pruning, path building (slug and traversal cases).
+- Header notice: `serveIndex` includes the notice when recording is enabled and omits it when it is off.
 - Gateway hook: with a fake `Recorder`, start and stop are called once per session, including when the session ends by kill, revoke, idle and max duration.
 
 ## Deployment
 
 - Install ffmpeg on the gateway host (`apt install ffmpeg` on Debian). The README and ARROW.md state the requirement.
 - No change to the Cloudflare or network setup.
-
-## Open questions for the operator
-
-- **Notice to playtesters.** The page currently says nothing about recording. Telling people they are recorded is usually required, and a one-line "This session is recorded" on the connected banner is cheap. This spec leaves it out of scope until the operator decides.
