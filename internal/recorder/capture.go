@@ -125,6 +125,7 @@ func readUpdate(br *bufio.Reader, fb *Framebuffer, raw []byte) ([]byte, error) {
 	if _, err := io.ReadFull(br, hd[:]); err != nil {
 		return raw, err
 	}
+	resized := false
 	for n := int(binary.BigEndian.Uint16(hd[1:])); n > 0; n-- {
 		var r [12]byte
 		if _, err := io.ReadFull(br, r[:]); err != nil {
@@ -157,6 +158,13 @@ func readUpdate(br *bufio.Reader, fb *Framebuffer, raw []byte) ([]byte, error) {
 				return raw, protoErr("%v", err)
 			}
 		case encDesktopSize:
+			if resized {
+				return raw, protoErr("several desktop size rectangles in one update")
+			}
+			resized = true
+			if sw, sh := fb.Size(); sw == w && sh == h {
+				break
+			}
 			if err := fb.Resize(w, h); err != nil {
 				return raw, protoErr("%v", err)
 			}

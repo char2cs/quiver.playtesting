@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,12 @@ func TestRunServerDisconnect(t *testing.T) {
 // scripted plays a server over a pipe: it accepts the client's setup, then writes script.
 func scripted(t *testing.T, w, h int, script func(c net.Conn)) error {
 	t.Helper()
+	_, err := scriptedFB(t, w, h, script)
+	return err
+}
+
+func scriptedFB(t *testing.T, w, h int, script func(c net.Conn)) (*Framebuffer, error) {
+	t.Helper()
 	cli, srv := net.Pipe()
 	go func() {
 		defer srv.Close()
@@ -107,16 +114,18 @@ func scripted(t *testing.T, w, h int, script func(c net.Conn)) error {
 		si = binary.BigEndian.AppendUint32(si, 0)
 		srv.Write(si)
 		io.CopyN(io.Discard, srv, 20+16+10) // SetPixelFormat, SetEncodings(3), first request
+		go io.Copy(io.Discard, srv)         // pipes are synchronous, so the client's update requests must be drained
 		script(srv)
 	}()
+	fbc := make(chan *Framebuffer, 1)
 	errc := make(chan error, 1)
-	go func() { errc <- Run(context.Background(), cli, func(*Framebuffer) {}) }()
+	go func() { errc <- Run(context.Background(), cli, func(f *Framebuffer) { fbc <- f }) }()
 	select {
 	case err := <-errc:
-		return err
+		return <-fbc, err
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run hung on hostile input")
-		return nil
+		return nil, nil
 	}
 }
 
@@ -147,12 +156,45 @@ func TestRunRejectsHostileServers(t *testing.T) {
 		"giant desktop size":   func(c net.Conn) { c.Write(update(rect(0, 0, 65535, 65535, -223, nil))) },
 		"giant cut text":       func(c net.Conn) { c.Write([]byte{3, 0, 0, 0, 0xff, 0xff, 0xff, 0xff}) },
 		"copyrect outside":     func(c net.Conn) { c.Write(update(rect(0, 0, 4, 4, 1, []byte{0, 99, 0, 99}))) },
+		"two desktop sizes": func(c net.Conn) {
+			c.Write(update(rect(0, 0, 9, 4, -223, nil), rect(0, 0, 10, 4, -223, nil)))
+		},
 	}
 	for name, script := range cases {
-		err := scripted(t, 8, 4, script)
-		if !errors.Is(err, ErrProtocol) {
-			t.Errorf("%s: got %v, want ErrProtocol", name, err)
+		t.Run(name, func(t *testing.T) {
+			err := scripted(t, 8, 4, script)
+			if !errors.Is(err, ErrProtocol) {
+				t.Errorf("got %v, want ErrProtocol", err)
+			}
+		})
+	}
+}
+
+func TestRunManyTinyRects(t *testing.T) {
+	err := scripted(t, 8, 4, func(c net.Conn) {
+		rects := make([][]byte, 65535)
+		for i := range rects {
+			rects[i] = rect(0, 0, 1, 1, 0, []byte{1, 2, 3, 0})
 		}
+		c.Write(update(rects...))
+		c.Write([]byte{99})
+	})
+	if !errors.Is(err, ErrProtocol) || !strings.Contains(err.Error(), "message type 99") {
+		t.Fatalf("got %v, want the update to be accepted and then message type 99 rejected", err)
+	}
+}
+
+func TestRunSameSizeDesktopSizeKeepsPixels(t *testing.T) {
+	fb, err := scriptedFB(t, 8, 4, func(c net.Conn) {
+		c.Write(update(rect(0, 0, 1, 1, 0, []byte{1, 2, 3, 0})))
+		c.Write(update(rect(0, 0, 8, 4, -223, nil)))
+		c.Write([]byte{99})
+	})
+	if !errors.Is(err, ErrProtocol) {
+		t.Fatal(err)
+	}
+	if snap, _, _ := fb.Snapshot(nil); snap[0] != 1 || snap[1] != 2 || snap[2] != 3 {
+		t.Fatalf("pixel %v, want [1 2 3]", snap[:3])
 	}
 }
 
