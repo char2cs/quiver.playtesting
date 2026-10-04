@@ -114,6 +114,12 @@ func serverInit() []byte {
 }
 
 func newRig(t testing.TB, opts rfb.RelayOptions) *rig {
+	r := newRigRaw(t, opts)
+	r.vmRecv = newRecorder(r.vm)
+	return r
+}
+
+func newRigRaw(t testing.TB, opts rfb.RelayOptions) *rig {
 	t.Helper()
 	browser, relayClient := tcpPair(t)
 	relayVM, vm := tcpPair(t)
@@ -140,7 +146,6 @@ func newRig(t testing.TB, opts rfb.RelayOptions) *rig {
 	if _, err := io.ReadFull(browser, got); err != nil || !bytes.Equal(got, serverInit()) {
 		t.Fatalf("serverinit %v %v", got, err)
 	}
-	r.vmRecv = newRecorder(vm)
 	return r
 }
 
@@ -203,7 +208,7 @@ func TestRelaySwallowsIncrementalInContinuousMode(t *testing.T) {
 
 func TestRelayPumpDrivesVM(t *testing.T) {
 	const interval = 5 * time.Millisecond
-	r := newRig(t, rfb.RelayOptions{PumpInterval: interval})
+	r := newRig(t, rfb.RelayOptions{PumpInterval: interval, PumpMinGap: time.Millisecond})
 	r.send(setEnc(-313))
 	r.read(1)
 	start := time.Now()
@@ -238,7 +243,7 @@ func TestRelayPumpDrivesVM(t *testing.T) {
 }
 
 func TestRelayEnableZeroKeepsRunning(t *testing.T) {
-	r := newRig(t, rfb.RelayOptions{PumpInterval: 2 * time.Millisecond})
+	r := newRig(t, rfb.RelayOptions{PumpInterval: 2 * time.Millisecond, PumpMinGap: time.Millisecond})
 	r.send(setEnc(-313))
 	r.read(1)
 	r.send(enable(1, 0, 0, 5, 5), enable(0, 0, 0, 5, 5), keyDown)
@@ -280,7 +285,7 @@ func TestRelayInjectsOnceBeforeFirstVMByte(t *testing.T) {
 }
 
 func TestRelayPlainModeWithoutOffer(t *testing.T) {
-	r := newRig(t, rfb.RelayOptions{PumpInterval: time.Millisecond})
+	r := newRig(t, rfb.RelayOptions{PumpInterval: time.Millisecond, PumpMinGap: time.Millisecond})
 	r.vm.Write([]byte("XYZ"))
 	r.send(setEnc(0, 1), fbur(1, 0, 0, 5, 5), enable(1, 0, 0, 5, 5), keyDown)
 	if got := r.read(3); string(got) != "XYZ" {
@@ -388,7 +393,7 @@ func TestRelayCleanEOFReturnsNil(t *testing.T) {
 }
 
 func TestRelayCancelClosesEverything(t *testing.T) {
-	r := newRig(t, rfb.RelayOptions{PumpInterval: time.Millisecond})
+	r := newRig(t, rfb.RelayOptions{PumpInterval: time.Millisecond, PumpMinGap: time.Millisecond})
 	r.send(setEnc(-313))
 	r.read(1)
 	r.send(enable(1, 0, 0, 1, 1))
@@ -450,4 +455,96 @@ func TestRelayThroughput(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func countReqs(b []byte, hdr int) int { return (len(b) - hdr) / 10 }
+
+func TestPumpRepliesTriggerRequests(t *testing.T) {
+	hdr := len(setEnc())
+	r := newRig(t, rfb.RelayOptions{PumpInterval: time.Hour, PumpSettle: 2 * time.Millisecond, PumpMinGap: time.Millisecond})
+	r.send(setEnc(-313))
+	r.read(1)
+	r.send(enable(1, 0, 0, 7, 7))
+	for i := 1; i <= 3; i++ {
+		r.vm.Write([]byte{0})
+		got := r.vmRecv.waitLen(t, hdr+10*i)
+		if !bytes.Equal(got[hdr+10*(i-1):hdr+10*i], fbur(1, 0, 0, 7, 7)) {
+			t.Fatalf("request %d wrong: %v", i, got)
+		}
+	}
+}
+
+func TestPumpMinGapWithBackToBackReplies(t *testing.T) {
+	const gap = 40 * time.Millisecond
+	hdr := len(setEnc())
+	r := newRig(t, rfb.RelayOptions{PumpInterval: time.Hour, PumpSettle: time.Millisecond, PumpMinGap: gap})
+	r.send(setEnc(-313))
+	r.read(1)
+	r.send(enable(1, 0, 0, 7, 7))
+	go io.Copy(io.Discard, r.browser)
+	start := time.Now()
+	for time.Since(start) < 400*time.Millisecond {
+		r.vm.Write([]byte{0})
+		time.Sleep(time.Millisecond)
+	}
+	n := countReqs(r.vmRecv.bytes(), hdr)
+	if max := int(time.Since(start)/gap) + 2; n > max || n < 3 {
+		t.Fatalf("%d requests, want 3..%d", n, max)
+	}
+}
+
+func TestPumpStaysUnderX11vncLimit(t *testing.T) {
+	const limit = 25
+	run := func(t *testing.T, reply bool, d time.Duration) (requests int, silent bool) {
+		r := newRigRaw(t, rfb.RelayOptions{})
+		r.send(setEnc(-313))
+		r.read(1)
+		go io.Copy(io.Discard, r.browser)
+		var mu sync.Mutex
+		var times []time.Time
+		go func() {
+			io.ReadFull(r.vm, make([]byte, len(setEnc())))
+			buf := make([]byte, 10)
+			for {
+				if _, err := io.ReadFull(r.vm, buf); err != nil {
+					return
+				}
+				mu.Lock()
+				now := time.Now()
+				times = append(times, now)
+				for len(times) > 0 && now.Sub(times[0]) > time.Second {
+					times = times[1:]
+				}
+				requests++
+				if len(times) > limit {
+					silent = true
+				}
+				quiet := silent
+				if reply && !quiet {
+					times = nil
+				}
+				mu.Unlock()
+				if reply && !quiet {
+					r.vm.Write([]byte{0})
+				}
+			}
+		}()
+		r.send(enable(1, 0, 0, 5, 5))
+		time.Sleep(d)
+		mu.Lock()
+		defer mu.Unlock()
+		return requests, silent
+	}
+	t.Run("idle", func(t *testing.T) {
+		n, silent := run(t, false, 1500*time.Millisecond)
+		if silent || n < 10 {
+			t.Fatalf("requests %d silent %v", n, silent)
+		}
+	})
+	t.Run("flowing", func(t *testing.T) {
+		n, silent := run(t, true, 500*time.Millisecond)
+		if silent || n < 15 {
+			t.Fatalf("requests %d silent %v", n, silent)
+		}
+	})
 }

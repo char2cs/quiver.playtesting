@@ -23,7 +23,9 @@ const (
 	maxScreens     = 16
 	maxServerName  = 4096
 	relayBufSize   = 64 * 1024
-	defaultPump    = 10 * time.Millisecond
+	defaultPump    = 60 * time.Millisecond
+	defaultSettle  = 3 * time.Millisecond
+	defaultMinGap  = 8 * time.Millisecond
 	defaultAdvWait = 5 * time.Second
 )
 
@@ -31,8 +33,12 @@ const (
 var ErrProtocol = errors.New("rfb: protocol violation")
 
 type RelayOptions struct {
-	// PumpInterval is the gap between the incremental requests sent to the VM. Zero means 10ms.
+	// PumpInterval is the heartbeat: the longest gap between incremental requests sent to the VM. Zero means 60ms.
 	PumpInterval time.Duration
+	// PumpSettle is how long the pump waits after VM traffic before it requests again. Zero means 3ms.
+	PumpSettle time.Duration
+	// PumpMinGap is the minimum gap between two requests. Zero means 8ms.
+	PumpMinGap time.Duration
 	// AdvertiseWait is how long to wait for the first SetEncodings before relaying in plain mode. Zero means 5s.
 	AdvertiseWait time.Duration
 	// PumpWriter receives the pump's requests, so callers can keep them out of idle accounting. Nil means the vm conn.
@@ -50,6 +56,12 @@ func protoErr(format string, a ...any) error {
 func Relay(ctx context.Context, client, vm net.Conn, opts RelayOptions) error {
 	if opts.PumpInterval <= 0 {
 		opts.PumpInterval = defaultPump
+	}
+	if opts.PumpSettle <= 0 {
+		opts.PumpSettle = defaultSettle
+	}
+	if opts.PumpMinGap <= 0 {
+		opts.PumpMinGap = defaultMinGap
 	}
 	if opts.AdvertiseWait <= 0 {
 		opts.AdvertiseWait = defaultAdvWait
@@ -97,7 +109,7 @@ func Relay(ctx context.Context, client, vm net.Conn, opts RelayOptions) error {
 		pw = vm
 	}
 	pump := &lockedWriter{mu: vmMu, w: pw}
-	r := &relay{client: client, vm: vmw, pump: pump, opts: opts, opened: make(chan struct{})}
+	r := &relay{client: client, vm: vmw, pump: pump, opts: opts, opened: make(chan struct{}), activity: make(chan struct{}, 1)}
 	br := bufio.NewReader(client)
 
 	if err := r.init(br, vm); err != nil {
@@ -139,6 +151,25 @@ type relay struct {
 	isOpen bool
 	opened chan struct{}
 	region atomic.Uint64
+
+	activity chan struct{}
+}
+
+// signalReader tells the pump that the VM is talking, without slowing the copy.
+type signalReader struct {
+	r  io.Reader
+	ch chan<- struct{}
+}
+
+func (s signalReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		select {
+		case s.ch <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
 }
 
 func (r *relay) init(br *bufio.Reader, vm io.Reader) error {
@@ -196,7 +227,7 @@ func (r *relay) toBrowser(ctx context.Context, vm io.Reader) error {
 	case <-ctx.Done():
 		return nil
 	}
-	_, err := io.CopyBuffer(struct{ io.Writer }{r.client}, struct{ io.Reader }{vm}, make([]byte, relayBufSize))
+	_, err := io.CopyBuffer(struct{ io.Writer }{r.client}, signalReader{vm, r.activity}, make([]byte, relayBufSize))
 	return err
 }
 
@@ -239,21 +270,51 @@ func (r *relay) toVM(ctx context.Context, br *bufio.Reader, run func(func() erro
 	}
 }
 
+// runPump paces requests on the VM's replies plus a slow heartbeat: x11vnc stops
+// answering when it is flooded with unanswered incremental requests.
 func (r *relay) runPump(ctx context.Context) error {
-	t := time.NewTicker(r.opts.PumpInterval)
-	defer t.Stop()
+	hb := time.NewTimer(r.opts.PumpInterval)
+	defer hb.Stop()
 	var msg [10]byte
 	msg[0], msg[1] = 3, 1
+	var last time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-t.C:
+		case <-r.activity:
+			if !sleep(ctx, r.opts.PumpSettle) {
+				return nil
+			}
+		case <-hb.C:
+		}
+		if !last.IsZero() && !sleep(ctx, r.opts.PumpMinGap-time.Since(last)) {
+			return nil
+		}
+		select {
+		case <-r.activity:
+		default:
 		}
 		binary.BigEndian.PutUint64(msg[2:], r.region.Load())
 		if _, err := r.pump.Write(msg[:]); err != nil {
 			return err
 		}
+		last = time.Now()
+		hb.Reset(r.opts.PumpInterval)
+	}
+}
+
+func sleep(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

@@ -36,9 +36,9 @@ func Accept(conn net.Conn) error
 // Relay takes over after both handshakes (the next bytes are ClientInit) and returns when either side ends or ctx is done; both conns are closed on return.
 // It forwards ClientInit/ServerInit, parses browser messages with a strict whitelist (anything else returns an error wrapping rfb.ErrProtocol),
 // strips pseudo-encoding -313 from SetEncodings, drops ClientCutText, and when the browser offered -313 it injects one EndOfContinuousUpdates byte (150)
-// before any VM byte, swallows incremental FramebufferUpdateRequests and pumps its own incremental requests to the VM. VM to browser bytes are copied opaquely.
+// before any VM byte, swallows incremental FramebufferUpdateRequests and pumps its own incremental requests to the VM, paced on the VM's replies plus a slow heartbeat (x11vnc goes silent when flooded with unanswered requests). VM to browser bytes are copied opaquely.
 func Relay(ctx context.Context, client, vm net.Conn, opts RelayOptions) error
-type RelayOptions struct { PumpInterval, AdvertiseWait time.Duration; PumpWriter io.Writer } // zero values mean 10ms, 5s, the vm conn
+type RelayOptions struct { PumpInterval, PumpSettle, PumpMinGap, AdvertiseWait time.Duration; PumpWriter io.Writer } // zero values mean 60ms heartbeat, 3ms, 8ms, 5s, the vm conn
 ```
 With `Config.ContinuousUpdates` the gateway runs `rfb.Relay` after both succeed; without it, it copies bytes both ways untouched (ClientInit/ServerInit and everything after pass through).
 
