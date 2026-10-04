@@ -35,7 +35,7 @@ Local end to end test VM: see `testenv/README.md`. Design: `docs/superpowers/spe
 
 - Variables: `PUBLIC_HOST`, `REAL_IP_HEADER`, `MAX_SESSIONS`, `IDLE_TIMEOUT`. Netbridge allocates `GATEWAY_PORT` (default 8480), the only port to expose.
 - State lives in `${INSTALL_PATH}/data` (database and admin socket). Uninstall keeps it.
-- Operate it from the host shell: `cd <install path> && ./quiver-playtest tui --data ./data`.
+- Operate it from the host shell with `quiver-playtest tui`. The arrow exposes the command through Quiver (`~/.quiver/bin`, see `quiver path setup`) and it finds its data folder next to the real binary.
 - Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which publishes tarballs. Until the first stable tag exists, the arrow downloads the rolling `nightly` build; switch its URLs and `version` to the tag once released.
 
 ## Nightly builds

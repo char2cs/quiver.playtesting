@@ -55,11 +55,24 @@ func envOr(key, def string) string {
 	return def
 }
 
+// defaultDataDir keeps the data next to the real binary, so the command works
+// from anywhere once it is symlinked onto the PATH.
+func defaultDataDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "./data"
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	return filepath.Join(filepath.Dir(exe), "data")
+}
+
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	listen := fs.String("listen", envOr("QP_LISTEN", "127.0.0.1:8480"), "public HTTP listen address (use a high port)")
 	publicHost := fs.String("public-host", envOr("QP_PUBLIC_HOST", "playtesting.quiver.ar"), "public hostname, used for the Origin check")
-	data := fs.String("data", envOr("QP_DATA", "./data"), "data directory (database and admin socket)")
+	data := fs.String("data", envOr("QP_DATA", defaultDataDir()), "data directory (database and admin socket)")
 	realIP := fs.String("real-ip-header", envOr("QP_REAL_IP_HEADER", "CF-Connecting-IP"), "header carrying the client IP, empty to use the socket peer")
 	proxies := fs.String("trusted-proxies", envOr("QP_TRUSTED_PROXIES", "cloudflare"), "peers allowed to set the real IP header: comma separated CIDRs/IPs, 'cloudflare', or 'none'")
 	maxConns := fs.Int("max-conns", 50, "max concurrent sessions")
@@ -152,7 +165,7 @@ func pruneLoop(ctx context.Context, st *store.Store, keep time.Duration) {
 
 func runTUI(args []string) error {
 	fs := flag.NewFlagSet("tui", flag.ExitOnError)
-	data := fs.String("data", envOr("QP_DATA", "./data"), "data directory of the running serve")
+	data := fs.String("data", envOr("QP_DATA", defaultDataDir()), "data directory of the running serve")
 	publicURL := fs.String("public-url", envOr("QP_PUBLIC_URL", "https://playtesting.quiver.ar"), "base URL used to build playtester links")
 	fs.Parse(args)
 

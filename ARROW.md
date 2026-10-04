@@ -29,14 +29,13 @@ The gateway only believes the client IP header from your proxy's addresses (Clou
 
 ## Running the TUI
 
-The gateway runs as the arrow's service. To manage it, open a shell on the same machine:
+The gateway runs as the arrow's service, and Quiver puts a `quiver-playtest` command in `~/.quiver/bin` (run `quiver path setup` once if that folder is not on your PATH). To manage the gateway, open a shell on the same machine:
 
 ```
-cd <install path>
-./quiver-playtest tui --data ./data --public-url https://<your host>
+quiver-playtest tui --public-url https://<your host>
 ```
 
-Your data (VMs, links, session history) lives in the `data` folder and survives updates and uninstalls.
+Your data (VMs, links, session history) lives in the `data` folder inside the install and survives updates and uninstalls. The command finds it on its own.
 
 ```arrow
 schema: "arrow@v0"
@@ -100,6 +99,11 @@ targets:
       cpu_cores: 1
       ram_gb: 1
       disk_gb: 1
+
+    expose:
+      cli:
+        - name: quiver-playtest
+          path: ${INSTALL_PATH}/quiver-playtest
 
     lifecycle:
       install:
