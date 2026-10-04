@@ -59,6 +59,9 @@ type Config struct {
 	TrustedProxies []netip.Prefix
 	MaxOpenConns   int
 	PerPeerConns   int
+	// ContinuousUpdates makes the gateway serve the RFB ContinuousUpdates extension itself;
+	// off falls back to copying bytes untouched.
+	ContinuousUpdates bool
 }
 
 type Backend interface {
@@ -408,14 +411,26 @@ func (h *handler) bridge(ctx context.Context, cancel context.CancelCauseFunc, ws
 	a, b := touchConn{nc, act}, touchConn{vm, act}
 
 	var wg sync.WaitGroup
-	cp := func(dst, src net.Conn) {
-		defer wg.Done()
-		defer cancel(errors.New(reasonClosed))
-		io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, make([]byte, copyBufSize))
+	if h.cfg.ContinuousUpdates {
+		wg.Add(1)
+		goSafe(func() {
+			defer wg.Done()
+			defer cancel(errors.New(reasonClosed))
+			if err := rfb.Relay(ctx, a, b, rfb.RelayOptions{PumpWriter: vm}); errors.Is(err, rfb.ErrProtocol) {
+				cancel(errors.New(reasonBadRFB))
+			}
+		})
+	} else {
+		cp := func(dst, src net.Conn) {
+			defer wg.Done()
+			defer cancel(errors.New(reasonClosed))
+			io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, make([]byte, copyBufSize))
+		}
+		wg.Add(2)
+		goSafe(func() { cp(b, a) })
+		goSafe(func() { cp(a, b) })
 	}
-	wg.Add(3)
-	goSafe(func() { cp(b, a) })
-	goSafe(func() { cp(a, b) })
+	wg.Add(1)
 	goSafe(func() {
 		defer wg.Done()
 		defer cancel(errors.New(reasonClosed))

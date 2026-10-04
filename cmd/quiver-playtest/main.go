@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -55,6 +56,13 @@ func envOr(key, def string) string {
 	return def
 }
 
+func envBool(key string, def bool) bool {
+	if v, err := strconv.ParseBool(os.Getenv(key)); err == nil {
+		return v
+	}
+	return def
+}
+
 // defaultDataDir keeps the data next to the real binary, so the command works
 // from anywhere once it is symlinked onto the PATH.
 func defaultDataDir() string {
@@ -79,6 +87,7 @@ func serve(args []string) error {
 	idle := fs.Duration("idle-timeout", 15*time.Minute, "end sessions with no traffic for this long")
 	maxSession := fs.Duration("max-session", 4*time.Hour, "hard cap on a single session")
 	retention := fs.Duration("log-retention", 90*24*time.Hour, "delete session history older than this, 0 keeps everything")
+	continuous := fs.Bool("continuous-updates", envBool("QP_CONTINUOUS_UPDATES", true), "serve the RFB ContinuousUpdates extension (push-based updates); false copies bytes untouched")
 	fs.Parse(args)
 
 	trusted, err := gateway.ParseTrustedProxies(*proxies)
@@ -104,6 +113,8 @@ func serve(args []string) error {
 		MaxConns:       *maxConns,
 		IdleTimeout:    *idle,
 		MaxSession:     *maxSession,
+
+		ContinuousUpdates: *continuous,
 	}, svc, reg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

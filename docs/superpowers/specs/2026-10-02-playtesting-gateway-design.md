@@ -62,7 +62,7 @@ Flag marks the session's link and logs it. Drop kills the session and optionally
 
 ## Configuration
 
-Flags or env: `--listen :PORT` (high port), `--public-host playtesting.quiver.ar`, `--data ./data`, `--real-ip-header CF-Connecting-IP`, `--trusted-proxies cloudflare|none|CIDRs`, `--max-session`, `--log-retention`, `--max-conns`, `--link-ttl`.
+Flags or env: `--listen :PORT` (high port), `--public-host playtesting.quiver.ar`, `--data ./data`, `--real-ip-header CF-Connecting-IP`, `--trusted-proxies cloudflare|none|CIDRs`, `--max-session`, `--log-retention`, `--max-conns`, `--link-ttl`, `--continuous-updates` (default true, kill switch for push-based screen updates).
 
 ## Testing
 
