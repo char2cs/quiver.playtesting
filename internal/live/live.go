@@ -59,6 +59,14 @@ func (r *Registry) End(id string, reason string) {
 	r.emit(core.Event{Type: "end", Session: e.sess, Reason: reason})
 }
 
+func (r *Registry) SetRecording(id, path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.sessions[id]; ok {
+		e.sess.Recording = path
+	}
+}
+
 func (r *Registry) Kill(id, reason string) error {
 	r.mu.Lock()
 	e, ok := r.sessions[id]

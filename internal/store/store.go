@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS session_log (
 	client_ip  TEXT NOT NULL,
 	started_at INTEGER NOT NULL,
 	ended_at   INTEGER NOT NULL,
-	reason     TEXT NOT NULL
+	reason     TEXT NOT NULL,
+	recording  TEXT NOT NULL DEFAULT ''
 );
 `
 
@@ -83,6 +84,10 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {
 		if _, err := os.Stat(path + suffix); err == nil {
@@ -264,9 +269,9 @@ func (s *Store) FlagLink(ctx context.Context, id int64) error {
 
 func (s *Store) LogSession(ctx context.Context, sess core.Session, ended time.Time, reason string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO session_log (session_id, link_id, label, vm_id, vm_name, client_ip, started_at, ended_at, reason)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sess.ID, sess.LinkID, sess.Label, sess.VMID, sess.VMName, sess.ClientIP, ts(sess.StartedAt), ts(ended), reason)
+		`INSERT INTO session_log (session_id, link_id, label, vm_id, vm_name, client_ip, started_at, ended_at, reason, recording)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sess.ID, sess.LinkID, sess.Label, sess.VMID, sess.VMName, sess.ClientIP, ts(sess.StartedAt), ts(ended), reason, sess.Recording)
 	return err
 }
 
@@ -277,4 +282,33 @@ func (s *Store) PruneSessionLog(ctx context.Context, cutoff time.Time) (int64, e
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// migrate adds columns that databases created by older releases lack.
+func migrate(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(session_log)`)
+	if err != nil {
+		return err
+	}
+	has := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "recording" {
+			has = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	_, err = db.Exec(`ALTER TABLE session_log ADD COLUMN recording TEXT NOT NULL DEFAULT ''`)
+	return err
 }
