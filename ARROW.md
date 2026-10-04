@@ -105,8 +105,8 @@ targets:
       install:
         - type: fetch
           url:
-            default: https://github.com/char2cs/quiver.playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_amd64.tar.gz
-            linux/arm64: https://github.com/char2cs/quiver.playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_arm64.tar.gz
+            default: https://github.com/char2cs/quiver.playtesting/releases/download/nightly/quiver-playtest_nightly_linux_amd64.tar.gz
+            linux/arm64: https://github.com/char2cs/quiver.playtesting/releases/download/nightly/quiver-playtest_nightly_linux_arm64.tar.gz
           to: ./quiver-playtest.tar.gz
           title: Downloading quiver-playtest
           timeout: 5m
@@ -130,8 +130,8 @@ targets:
       update:
         - type: fetch
           url:
-            default: https://github.com/char2cs/quiver.playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_amd64.tar.gz
-            linux/arm64: https://github.com/char2cs/quiver.playtesting/releases/download/v0.1.0/quiver-playtest_0.1.0_linux_arm64.tar.gz
+            default: https://github.com/char2cs/quiver.playtesting/releases/download/nightly/quiver-playtest_nightly_linux_amd64.tar.gz
+            linux/arm64: https://github.com/char2cs/quiver.playtesting/releases/download/nightly/quiver-playtest_nightly_linux_arm64.tar.gz
           to: ./quiver-playtest.tar.gz
           title: Downloading quiver-playtest
           timeout: 5m

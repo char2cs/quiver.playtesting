@@ -36,7 +36,7 @@ Local end to end test VM: see `testenv/README.md`. Design: `docs/superpowers/spe
 - Variables: `PUBLIC_HOST`, `REAL_IP_HEADER`, `MAX_SESSIONS`, `IDLE_TIMEOUT`. Netbridge allocates `GATEWAY_PORT` (default 8480), the only port to expose.
 - State lives in `${INSTALL_PATH}/data` (database and admin socket). Uninstall keeps it.
 - Operate it from the host shell: `cd <install path> && ./quiver-playtest tui --data ./data`.
-- Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which publishes the tarballs the arrow downloads. Bump the URLs and `version` in `ARROW.md` to match the tag. The repository must be public for the arrow to download release assets without credentials.
+- Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which publishes tarballs. Until the first stable tag exists, the arrow downloads the rolling `nightly` build; switch its URLs and `version` to the tag once released.
 
 ## Nightly builds
 
