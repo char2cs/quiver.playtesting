@@ -233,3 +233,16 @@ func TestRowsAreRendered(t *testing.T) {
 		t.Fatalf("row missing from rendered table:\n%s", out)
 	}
 }
+
+func TestSessionsTableMarksRecording(t *testing.T) {
+	m := newTestModel(&fakeSvc{})
+	m.sessions = []core.Session{
+		{ID: "a", Label: "one", VMName: "vm", ClientIP: "1.1.1.1", StartedAt: time.Now(), Recording: "/rec/a.mp4"},
+		{ID: "b", Label: "two", VMName: "vm", ClientIP: "2.2.2.2", StartedAt: time.Now()},
+	}
+	m.syncRows()
+	rows := m.tables[tabSessions].Rows()
+	if len(rows) != 2 || rows[0][4] != "REC" || rows[1][4] != "" {
+		t.Fatalf("rows %v", rows)
+	}
+}

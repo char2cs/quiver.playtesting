@@ -85,7 +85,7 @@ func Run(svc core.Service, publicURL string) error {
 
 func newModel(svc core.Service, publicURL string, events <-chan core.Event) *model {
 	m := &model{svc: svc, publicURL: strings.TrimRight(publicURL, "/"), events: events, width: 100, height: 30}
-	m.tables[tabSessions] = newTable([]table.Column{{Title: "Label", Width: 22}, {Title: "VM", Width: 18}, {Title: "Client IP", Width: 18}, {Title: "Running", Width: 10}})
+	m.tables[tabSessions] = newTable([]table.Column{{Title: "Label", Width: 22}, {Title: "VM", Width: 18}, {Title: "Client IP", Width: 18}, {Title: "Running", Width: 10}, {Title: "Rec", Width: 5}})
 	m.tables[tabVMs] = newTable([]table.Column{{Title: "ID", Width: 5}, {Title: "Name", Width: 22}, {Title: "Host", Width: 30}, {Title: "Port", Width: 7}})
 	m.tables[tabLinks] = newTable([]table.Column{{Title: "ID", Width: 5}, {Title: "Label", Width: 22}, {Title: "VM", Width: 18}, {Title: "Status", Width: 10}, {Title: "Expires", Width: 14}})
 	m.resize()
@@ -260,7 +260,11 @@ func (m *model) syncRows() {
 	now := time.Now()
 	rows := make([]table.Row, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		rows = append(rows, table.Row{s.Label, s.VMName, s.ClientIP, age(now.Sub(s.StartedAt))})
+		rec := ""
+		if s.Recording != "" {
+			rec = "REC"
+		}
+		rows = append(rows, table.Row{s.Label, s.VMName, s.ClientIP, age(now.Sub(s.StartedAt)), rec})
 	}
 	m.setRows(tabSessions, rows)
 
