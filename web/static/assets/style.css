@@ -8,6 +8,9 @@ html, body { margin: 0; height: 100%; background: var(--carbon); color: var(--pa
 .mark svg { display: block; width: 100%; height: auto; }
 .label { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-weight: 500; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1.4; color: var(--paper); }
 .label::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 10px; background: var(--yellow); }
+.right { display: flex; align-items: center; gap: 24px; }
+.rec { display: flex; align-items: center; gap: 8px; font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-weight: 500; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--paper); opacity: 0.75; }
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: #E5484D; }
 #screen { position: fixed; inset: var(--header) 0 0 0; background: #000; }
 #status { position: fixed; top: calc(var(--header) + 14px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-radius: 999px; background: var(--ink); border: 1px solid rgba(245, 241, 232, 0.16); font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4); transition: opacity 0.4s ease; pointer-events: none; z-index: 10; }
 #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); animation: pulse 1.2s ease-in-out infinite; }
@@ -17,4 +20,4 @@ html, body { margin: 0; height: 100%; background: var(--carbon); color: var(--pa
 #status[data-state="ended"] { top: 50%; transform: translate(-50%, -50%); padding: 14px 24px; font-size: 12px; }
 @keyframes pulse { 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) { #status .dot { animation: none; } }
-@media (max-width: 560px) { .bar { padding-inline: 16px; } .mark { width: 96px; } }
+@media (max-width: 560px) { .bar { padding-inline: 16px; } .mark { width: 96px; } .right { gap: 12px; } .rec { font-size: 10px; } }

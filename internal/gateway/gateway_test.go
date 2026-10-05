@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"reflect"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,14 @@ type fakeBackend struct {
 	links   map[string]core.Link
 	vms     map[int64]core.VM
 	loggedC chan string
+	lastMu  sync.Mutex
+	last    core.Session
+}
+
+func (b *fakeBackend) lastSession() core.Session {
+	b.lastMu.Lock()
+	defer b.lastMu.Unlock()
+	return b.last
 }
 
 func newBackend() *fakeBackend {
@@ -45,6 +54,9 @@ func (b *fakeBackend) Resolve(_ context.Context, token string) (core.Link, core.
 }
 
 func (b *fakeBackend) LogSession(_ context.Context, s core.Session, _ time.Time, reason string) error {
+	b.lastMu.Lock()
+	b.last = s
+	b.lastMu.Unlock()
 	b.loggedC <- reason
 	return nil
 }
