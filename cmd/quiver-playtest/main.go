@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -246,7 +247,8 @@ func recordingPruneLoop(ctx context.Context, dir string, keep time.Duration) {
 }
 
 // parseSize reads a byte count such as 2GiB, 512MiB, 1GB or a plain number.
-func parseSize(s string) (uint64, error) {
+func parseSize(input string) (uint64, error) {
+	s := strings.TrimSpace(input)
 	units := []struct {
 		suffix string
 		mult   uint64
@@ -260,7 +262,10 @@ func parseSize(s string) (uint64, error) {
 	}
 	n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid size %q", s)
+		return 0, fmt.Errorf("invalid size %q", input)
+	}
+	if n > math.MaxUint64/mult {
+		return 0, fmt.Errorf("size %q is too large", input)
 	}
 	return n * mult, nil
 }
