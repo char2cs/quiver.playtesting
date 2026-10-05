@@ -6,17 +6,20 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"quiver-playtesting/internal/admin"
 	"quiver-playtesting/internal/gateway"
 	"quiver-playtesting/internal/live"
+	"quiver-playtesting/internal/recorder"
 	"quiver-playtesting/internal/service"
 	"quiver-playtesting/internal/store"
 	"quiver-playtesting/internal/tui"
@@ -63,6 +66,20 @@ func envBool(key string, def bool) bool {
 	return def
 }
 
+func envInt(key string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil {
+		return v
+	}
+	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v, err := time.ParseDuration(os.Getenv(key)); err == nil {
+		return v
+	}
+	return def
+}
+
 // defaultDataDir keeps the data next to the real binary, so the command works
 // from anywhere once it is symlinked onto the PATH.
 func defaultDataDir() string {
@@ -88,7 +105,25 @@ func serve(args []string) error {
 	maxSession := fs.Duration("max-session", 4*time.Hour, "hard cap on a single session")
 	retention := fs.Duration("log-retention", 90*24*time.Hour, "delete session history older than this, 0 keeps everything")
 	continuous := fs.Bool("continuous-updates", envBool("QP_CONTINUOUS_UPDATES", true), "serve the RFB ContinuousUpdates extension (push-based updates); false copies bytes untouched")
+	recordOn := fs.Bool("recordings", envBool("QP_RECORDINGS", true), "record every session to an mp4 (needs ffmpeg)")
+	recordDir := fs.String("recordings-dir", envOr("QP_RECORDINGS_DIR", ""), "where recordings go, default <data>/recordings")
+	ffmpegBin := fs.String("ffmpeg", envOr("QP_FFMPEG", "ffmpeg"), "ffmpeg binary")
+	recordFPS := fs.Int("record-fps", envInt("QP_RECORD_FPS", 10), "recording frame rate, 1 to 30")
+	recordMax := fs.Int("recordings-max", envInt("QP_RECORDINGS_MAX", 2), "max concurrent recordings")
+	recordFree := fs.String("recordings-min-free", envOr("QP_RECORDINGS_MIN_FREE", "2GiB"), "stop recording below this much free disk")
+	recordKeep := fs.Duration("recordings-retention", envDuration("QP_RECORDINGS_RETENTION", 720*time.Hour), "delete recordings older than this, 0 keeps everything")
 	fs.Parse(args)
+
+	if *recordFPS < 1 || *recordFPS > 30 {
+		return fmt.Errorf("--record-fps must be between 1 and 30, got %d", *recordFPS)
+	}
+	if *recordMax < 1 {
+		return fmt.Errorf("--recordings-max must be at least 1, got %d", *recordMax)
+	}
+	minFree, err := parseSize(*recordFree)
+	if err != nil {
+		return fmt.Errorf("--recordings-min-free: %w", err)
+	}
 
 	trusted, err := gateway.ParseTrustedProxies(*proxies)
 	if err != nil {
@@ -105,6 +140,21 @@ func serve(args []string) error {
 	reg := live.New()
 	svc := service.New(st, reg)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var rec *recorder.Recorder
+	if *recordOn {
+		dir := *recordDir
+		if dir == "" {
+			dir = filepath.Join(*data, "recordings")
+		}
+		rec = recorder.New(recorder.Config{Dir: dir, FFmpeg: *ffmpegBin, FPS: *recordFPS, Max: *recordMax, MinFree: minFree})
+		if rec.Enabled() && *recordKeep > 0 {
+			go recordingPruneLoop(ctx, dir, *recordKeep)
+		}
+	}
+
 	srv := gateway.NewServer(gateway.Config{
 		Listen:         *listen,
 		PublicHost:     *publicHost,
@@ -113,12 +163,10 @@ func serve(args []string) error {
 		MaxConns:       *maxConns,
 		IdleTimeout:    *idle,
 		MaxSession:     *maxSession,
+		Recorder:       recorderOrNil(rec),
 
 		ContinuousUpdates: *continuous,
 	}, svc, reg)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	if *retention > 0 {
 		go pruneLoop(ctx, st, *retention)
@@ -172,6 +220,54 @@ func pruneLoop(ctx context.Context, st *store.Store, keep time.Duration) {
 		case <-t.C:
 		}
 	}
+}
+
+func recorderOrNil(r *recorder.Recorder) gateway.Recorder {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
+func recordingPruneLoop(ctx context.Context, dir string, keep time.Duration) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		if n, err := recorder.Prune(dir, keep, time.Now()); err != nil {
+			slog.Warn("recordings prune failed", "err", err)
+		} else if n > 0 {
+			slog.Info("recordings pruned", "files", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// parseSize reads a byte count such as 2GiB, 512MiB, 1GB or a plain number.
+func parseSize(input string) (uint64, error) {
+	s := strings.TrimSpace(input)
+	units := []struct {
+		suffix string
+		mult   uint64
+	}{{"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}, {"GB", 1_000_000_000}, {"MB", 1_000_000}, {"KB", 1000}}
+	mult := uint64(1)
+	for _, u := range units {
+		if strings.HasSuffix(s, u.suffix) {
+			s, mult = strings.TrimSuffix(s, u.suffix), u.mult
+			break
+		}
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size %q", input)
+	}
+	if n > math.MaxUint64/mult {
+		return 0, fmt.Errorf("size %q is too large", input)
+	}
+	return n * mult, nil
 }
 
 func runTUI(args []string) error {

@@ -34,51 +34,59 @@ func Server(t testing.TB, password string) string {
 
 func serve(c net.Conn, password string) {
 	defer c.Close()
-	if _, err := c.Write([]byte("RFB 003.008\n")); err != nil {
+	if _, ok := handshake(c, password, 640, 480); !ok {
 		return
+	}
+	io.Copy(c, c)
+}
+
+// handshake runs version, security and init, ending after ServerInit. It returns the ClientInit shared flag.
+func handshake(c net.Conn, password string, w, h int) (shared, ok bool) {
+	if _, err := c.Write([]byte("RFB 003.008\n")); err != nil {
+		return false, false
 	}
 	var ver [12]byte
 	if _, err := io.ReadFull(c, ver[:]); err != nil || string(ver[:]) != "RFB 003.008\n" {
-		return
+		return false, false
 	}
 	var sel [1]byte
 	if password == "" {
 		c.Write([]byte{1, 1})
 		if _, err := io.ReadFull(c, sel[:]); err != nil || sel[0] != 1 {
-			return
+			return false, false
 		}
 	} else {
 		c.Write([]byte{1, 2})
 		if _, err := io.ReadFull(c, sel[:]); err != nil || sel[0] != 2 {
-			return
+			return false, false
 		}
 		var ch [16]byte
 		rand.Read(ch[:])
 		c.Write(ch[:])
 		var resp [16]byte
 		if _, err := io.ReadFull(c, resp[:]); err != nil {
-			return
+			return false, false
 		}
 		if !bytes.Equal(resp[:], encrypt(password, ch)) {
 			msg := "bad password"
 			out := binary.BigEndian.AppendUint32(nil, 1)
 			out = binary.BigEndian.AppendUint32(out, uint32(len(msg)))
 			c.Write(append(out, msg...))
-			return
+			return false, false
 		}
 	}
 	c.Write([]byte{0, 0, 0, 0})
 	var ci [1]byte
 	if _, err := io.ReadFull(c, ci[:]); err != nil {
-		return
+		return false, false
 	}
 	name := "fake"
-	si := binary.BigEndian.AppendUint16(nil, 640)
-	si = binary.BigEndian.AppendUint16(si, 480)
+	si := binary.BigEndian.AppendUint16(nil, uint16(w))
+	si = binary.BigEndian.AppendUint16(si, uint16(h))
 	si = append(si, make([]byte, 16)...)
 	si = binary.BigEndian.AppendUint32(si, uint32(len(name)))
 	c.Write(append(si, name...))
-	io.Copy(c, c)
+	return ci[0] != 0, true
 }
 
 func encrypt(password string, ch [16]byte) []byte {

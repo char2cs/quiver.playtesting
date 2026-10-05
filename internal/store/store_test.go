@@ -284,3 +284,38 @@ func TestWALFilesAreOwnerOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionLogRecordingColumn(t *testing.T) {
+	s, _ := open(t)
+	sess := core.Session{ID: "abc", LinkID: 1, Label: "l", VMID: 2, VMName: "vm", ClientIP: "1.2.3.4", StartedAt: time.Now(), Recording: "/rec/a.mp4"}
+	if err := s.LogSession(context.Background(), sess, time.Now(), "closed"); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := s.db.QueryRow(`SELECT recording FROM session_log WHERE session_id = 'abc'`).Scan(&got); err != nil || got != "/rec/a.mp4" {
+		t.Fatalf("recording %q %v", got, err)
+	}
+}
+
+func TestOpenMigratesOldSessionLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE session_log (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, link_id INTEGER NOT NULL, label TEXT NOT NULL, vm_id INTEGER NOT NULL, vm_name TEXT NOT NULL, client_ip TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL, reason TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.LogSession(context.Background(), core.Session{ID: "x", StartedAt: time.Now()}, time.Now(), "closed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err != nil {
+		t.Fatalf("second open must be a no-op: %v", err)
+	}
+}

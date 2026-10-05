@@ -156,3 +156,19 @@ func TestConcurrent(t *testing.T) {
 		t.Fatal("leak")
 	}
 }
+
+func TestSetRecording(t *testing.T) {
+	r := New()
+	if err := r.Start(sess("a", 1, 10), nil); err != nil {
+		t.Fatal(err)
+	}
+	r.SetRecording("a", "/rec/x.mp4")
+	r.SetRecording("missing", "/rec/y.mp4")
+	l := r.List()
+	if len(l) != 1 || l[0].Recording != "/rec/x.mp4" {
+		t.Fatalf("list %+v", l)
+	}
+	if g, _ := r.Get("a"); g.Recording != "/rec/x.mp4" {
+		t.Fatalf("get %+v", g)
+	}
+}

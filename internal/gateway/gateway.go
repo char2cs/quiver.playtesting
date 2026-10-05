@@ -2,6 +2,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -62,11 +63,18 @@ type Config struct {
 	// ContinuousUpdates makes the gateway serve the RFB ContinuousUpdates extension itself;
 	// off falls back to copying bytes untouched.
 	ContinuousUpdates bool
+	// Recorder, when set and Enabled, records every session and turns on the header notice.
+	Recorder Recorder
 }
 
 type Backend interface {
 	Resolve(ctx context.Context, token string) (core.Link, core.VM, error)
 	LogSession(ctx context.Context, s core.Session, ended time.Time, reason string) error
+}
+
+type Recorder interface {
+	Enabled() bool
+	Start(ctx context.Context, s core.Session, vm core.VM) (path string, stop func())
 }
 
 type handler struct {
@@ -170,21 +178,20 @@ func notFound(w http.ResponseWriter) {
 }
 
 func (h *handler) serveIndex(w http.ResponseWriter, r *http.Request) {
-	f, err := h.static.Open("index.html")
+	page, err := fs.ReadFile(h.static, "index.html")
 	if err != nil {
 		notFound(w)
 		return
 	}
-	defer f.Close()
-	rs, ok := f.(io.ReadSeeker)
-	if !ok {
-		notFound(w)
-		return
+	notice := ""
+	if h.cfg.Recorder != nil && h.cfg.Recorder.Enabled() {
+		notice = `<div class="rec"><span class="rec-dot"></span>This session is recorded</div>`
 	}
+	page = bytes.Replace(page, []byte("<!--rec-notice-->"), []byte(notice), 1)
 	hd := w.Header()
 	hd.Set("Content-Security-Policy", staticCSP)
 	hd.Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeContent(w, r, "index.html", time.Time{}, rs)
+	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(page))
 }
 
 func (h *handler) serveAsset(w http.ResponseWriter, r *http.Request, name string) {
@@ -353,6 +360,15 @@ func (h *handler) serveWS(w http.ResponseWriter, r *http.Request, token string) 
 		closeWS(ws, websocket.StatusPolicyViolation, genericClose)
 		return
 	}
+	if h.cfg.Recorder != nil && h.cfg.Recorder.Enabled() {
+		if path, stop := h.cfg.Recorder.Start(ctx, sess, vm); path != "" {
+			defer stop()
+			sess.Recording = path
+			h.reg.SetRecording(sess.ID, path)
+		} else {
+			stop()
+		}
+	}
 	limit, limitReason := h.cfg.MaxSession, reasonMaxSes
 	if left := time.Until(link.ExpiresAt); left < limit {
 		limit, limitReason = max(left, time.Second), reasonExpired
@@ -421,14 +437,24 @@ func (h *handler) bridge(ctx context.Context, cancel context.CancelCauseFunc, ws
 			}
 		})
 	} else {
-		cp := func(dst, src net.Conn) {
+		cp := func(dst, src net.Conn, clientInit bool) {
 			defer wg.Done()
 			defer cancel(errors.New(reasonClosed))
+			if clientInit {
+				// Same as the relay: the VM always sees a shared ClientInit, whatever the browser sent.
+				var ci [1]byte
+				if _, err := io.ReadFull(src, ci[:]); err != nil {
+					return
+				}
+				if _, err := dst.Write([]byte{1}); err != nil {
+					return
+				}
+			}
 			io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, make([]byte, copyBufSize))
 		}
 		wg.Add(2)
-		goSafe(func() { cp(b, a) })
-		goSafe(func() { cp(a, b) })
+		goSafe(func() { cp(b, a, true) })
+		goSafe(func() { cp(a, b, false) })
 	}
 	wg.Add(1)
 	goSafe(func() {

@@ -27,6 +27,8 @@ Each link is tied to one VM, expires on its own, and allows one live session at 
 
 The gateway only believes the client IP header from your proxy's addresses (Cloudflare's by default), so nobody can dodge a ban by faking it. It refuses to connect to link-local and metadata addresses, caps a session at four hours, and shuts down cleanly on stop. Tokens are random and stored only as hashes. A bad token, an expired link and a busy VM all look the same from outside, and repeated bad guesses get an address banned for a while.
 
+Requirements: `ffmpeg` must be installed on the host (`apt install ffmpeg` on Debian, which includes libx264) for session recordings. Without ffmpeg or without libx264 the gateway still works and runs unrecorded.
+
 ## Running it headless
 
 On a machine with only the Quiver daemon (no desktop app):

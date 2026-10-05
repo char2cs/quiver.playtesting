@@ -43,6 +43,7 @@ type Session struct {
 	VMName    string    `json:"vm_name"`
 	ClientIP  string    `json:"client_ip"`
 	StartedAt time.Time `json:"started_at"`
+	Recording string    `json:"recording,omitempty"` // path of the first mp4 file, empty when the session is not recorded
 }
 
 type Event struct {

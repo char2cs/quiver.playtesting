@@ -548,3 +548,21 @@ func TestPumpStaysUnderX11vncLimit(t *testing.T) {
 		}
 	})
 }
+
+func TestRelayForcesSharedClientInit(t *testing.T) {
+	browser, relayClient := tcpPair(t)
+	relayVM, vm := tcpPair(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	fin := make(chan struct{})
+	go func() { rfb.Relay(ctx, relayClient, relayVM, rfb.RelayOptions{}); close(fin) }()
+	t.Cleanup(func() { cancel(); <-fin })
+	browser.SetDeadline(time.Now().Add(wait))
+	vm.SetDeadline(time.Now().Add(wait))
+	if _, err := browser.Write([]byte{0}); err != nil {
+		t.Fatal(err)
+	}
+	var ci [1]byte
+	if _, err := io.ReadFull(vm, ci[:]); err != nil || ci[0] != 1 {
+		t.Fatalf("the VM saw ClientInit %v (%v), want 1: a non-shared client would evict the recorder", ci, err)
+	}
+}
