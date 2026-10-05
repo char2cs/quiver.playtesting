@@ -208,3 +208,29 @@ func TestRunAcceptsBellAndCutText(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func copyRects(n, w, h int) [][]byte {
+	rects := make([][]byte, n)
+	for i := range rects {
+		rects[i] = rect(0, 0, w, h, 1, []byte{0, 0, 0, 0})
+	}
+	return rects
+}
+
+func TestRunCapsCopyRectArea(t *testing.T) {
+	// A 40x20 screen is 800 px so the cap is 3200 px: 8 rects of 400 px fit, 9 do not.
+	err := scripted(t, 40, 20, func(c net.Conn) { c.Write(update(copyRects(9, 20, 20)...)) })
+	if !errors.Is(err, ErrProtocol) || !strings.Contains(err.Error(), "copy rectangles exceed") {
+		t.Fatalf("got %v, want the copy cap to trip", err)
+	}
+}
+
+func TestRunAcceptsCopyRectsWithinCap(t *testing.T) {
+	err := scripted(t, 40, 20, func(c net.Conn) {
+		c.Write(update(copyRects(8, 20, 20)...))
+		c.Write([]byte{99})
+	})
+	if !errors.Is(err, ErrProtocol) || !strings.Contains(err.Error(), "message type 99") {
+		t.Fatalf("got %v, want the update accepted", err)
+	}
+}

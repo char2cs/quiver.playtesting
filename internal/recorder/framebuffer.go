@@ -21,6 +21,7 @@ type Framebuffer struct {
 	mu   sync.Mutex
 	w, h int
 	pix  []byte
+	tmp  []byte
 }
 
 func checkSize(w, h int) error {
@@ -89,7 +90,10 @@ func (f *Framebuffer) Copy(sx, sy, w, h, dx, dy int) error {
 	if !f.inside(sx, sy, w, h) || !f.inside(dx, dy, w, h) {
 		return errBounds
 	}
-	tmp := make([]byte, w*h*4)
+	if need := w * h * 4; cap(f.tmp) < need {
+		f.tmp = make([]byte, need)
+	}
+	tmp := f.tmp[:w*h*4]
 	for row := 0; row < h; row++ {
 		copy(tmp[row*w*4:], f.pix[((sy+row)*f.w+sx)*4:((sy+row)*f.w+sx+w)*4])
 	}

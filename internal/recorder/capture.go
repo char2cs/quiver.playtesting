@@ -126,6 +126,7 @@ func readUpdate(br *bufio.Reader, fb *Framebuffer, raw []byte) ([]byte, error) {
 		return raw, err
 	}
 	resized := false
+	var copied int64
 	for n := int(binary.BigEndian.Uint16(hd[1:])); n > 0; n-- {
 		var r [12]byte
 		if _, err := io.ReadFull(br, r[:]); err != nil {
@@ -150,6 +151,10 @@ func readUpdate(br *bufio.Reader, fb *Framebuffer, raw []byte) ([]byte, error) {
 				return raw, protoErr("%v", err)
 			}
 		case encCopyRect:
+			sw, sh := fb.Size()
+			if copied += int64(w) * int64(h); copied > 4*int64(sw)*int64(sh) {
+				return raw, protoErr("copy rectangles exceed the screen area")
+			}
 			var s [4]byte
 			if _, err := io.ReadFull(br, s[:]); err != nil {
 				return raw, err

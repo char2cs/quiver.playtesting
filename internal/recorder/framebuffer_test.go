@@ -65,6 +65,50 @@ func TestCopyOverlap(t *testing.T) {
 	}
 }
 
+func TestCopyOverlapRows(t *testing.T) {
+	grid := func() *Framebuffer {
+		fb, _ := NewFramebuffer(3, 3)
+		for i := 0; i < 9; i++ {
+			fb.PutRaw(i%3, i/3, 1, 1, px(byte(i+1), 0, 0))
+		}
+		return fb
+	}
+	read := func(fb *Framebuffer) []byte {
+		snap, _, _ := fb.Snapshot(nil)
+		out := make([]byte, 9)
+		for i := range out {
+			out[i] = snap[i*4]
+		}
+		return out
+	}
+	cases := []struct {
+		name                 string
+		sx, sy, w, h, dx, dy int
+		want                 []byte
+	}{
+		{"one row up", 0, 1, 3, 2, 0, 0, []byte{4, 5, 6, 7, 8, 9, 7, 8, 9}},
+		{"one row down", 0, 0, 3, 2, 0, 1, []byte{1, 2, 3, 1, 2, 3, 4, 5, 6}},
+		{"shift left", 1, 0, 2, 3, 0, 0, []byte{2, 3, 3, 5, 6, 6, 8, 9, 9}},
+	}
+	for _, c := range cases {
+		fb := grid()
+		if err := fb.Copy(c.sx, c.sy, c.w, c.h, c.dx, c.dy); err != nil {
+			t.Fatal(c.name, err)
+		}
+		if got := read(fb); !bytes.Equal(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestCopyReusesScratch(t *testing.T) {
+	fb, _ := NewFramebuffer(64, 64)
+	fb.Copy(0, 0, 32, 32, 8, 8)
+	if n := testing.AllocsPerRun(20, func() { fb.Copy(0, 0, 32, 32, 8, 8) }); n != 0 {
+		t.Fatalf("Copy allocates %v times per call", n)
+	}
+}
+
 func TestResizeClears(t *testing.T) {
 	fb, _ := NewFramebuffer(2, 2)
 	fb.PutRaw(0, 0, 1, 1, px(9, 9, 9))
