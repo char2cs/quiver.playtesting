@@ -25,6 +25,10 @@ func Prune(dir string, keep time.Duration, now time.Time) (int, error) {
 			continue
 		}
 		sub := filepath.Join(dir, d.Name())
+		di, err := d.Info()
+		if err != nil {
+			continue
+		}
 		files, err := os.ReadDir(sub)
 		if err != nil {
 			continue
@@ -41,7 +45,9 @@ func Prune(dir string, keep time.Duration, now time.Time) (int, error) {
 				removed++
 			}
 		}
-		_ = os.Remove(sub)
+		if di.ModTime().Before(cutoff) {
+			_ = os.Remove(sub)
+		}
 	}
 	return removed, nil
 }
