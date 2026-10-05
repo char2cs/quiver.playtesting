@@ -163,3 +163,19 @@ func TestEncoderDurationMatchesWallClock(t *testing.T) {
 		t.Fatalf("file %.2fs for %.2fs of wall time", dur, wall)
 	}
 }
+
+func TestEncoderFailureLeavesNoFile(t *testing.T) {
+	sh := filepath.Join(t.TempDir(), "fail.sh")
+	os.WriteFile(sh, []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	out := filepath.Join(t.TempDir(), "x.mp4")
+	enc, err := startEncoder(sh, out, 4, 4, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enc.Finish(5*time.Second) == nil {
+		t.Fatal("expected an error")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("empty file left behind: %v", err)
+	}
+}

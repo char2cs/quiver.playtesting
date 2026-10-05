@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -21,6 +22,22 @@ const (
 	finishWait = 10 * time.Second
 	diskEvery  = 30 * time.Second
 )
+
+// checkEncoders is a variable so tests with fake encoder scripts can skip the libx264 probe.
+var checkEncoders = func(bin string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "-hide_banner", "-encoders")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	out, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+	if !bytes.Contains(out, []byte("libx264")) {
+		return errors.New("ffmpeg has no libx264 encoder")
+	}
+	return nil
+}
 
 var errResized = errors.New("screen size changed")
 
@@ -56,6 +73,10 @@ func New(cfg Config) *Recorder {
 		return r
 	}
 	r.cfg.FFmpeg = bin
+	if err := checkEncoders(bin); err != nil {
+		slog.Warn("recording disabled: ffmpeg has no libx264 encoder", "err", err)
+		return r
+	}
 	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
 		slog.Warn("recording disabled: cannot create the recordings directory", "dir", cfg.Dir, "err", err)
 		return r

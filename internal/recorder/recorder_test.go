@@ -34,6 +34,9 @@ func vmFor(t *testing.T, srv *rfbtest.FB) core.VM {
 func newRec(t *testing.T, ffmpeg string, max int) (*Recorder, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "recordings")
+	old := checkEncoders
+	checkEncoders = func(string) error { return nil }
+	t.Cleanup(func() { checkEncoders = old })
 	r := New(Config{Dir: dir, FFmpeg: ffmpeg, FPS: 10, Max: max, MinFree: 1})
 	if !r.Enabled() {
 		t.Fatal("recorder should be enabled")
@@ -133,7 +136,9 @@ func TestEncoderCrashDoesNotHang(t *testing.T) {
 		t.Fatal("stop hung after the encoder crashed")
 	}
 	// the slot is free again
-	if p, s := r.Start(t.Context(), session(), vmFor(t, srv)); p == "" {
+	s2 := session()
+	s2.ID = "ff99ee11"
+	if p, s := r.Start(t.Context(), s2, vmFor(t, srv)); p == "" {
 		t.Fatal("slot leaked after a crash")
 	} else {
 		s()
@@ -172,11 +177,11 @@ func TestResolutionChangeStartsANewFile(t *testing.T) {
 	w1, h1, d1 := ffprobe(t, fp, path)
 	w2, h2, d2 := ffprobe(t, fp, part2)
 	t.Logf("part1 %dx%d %.2fs, part2 %dx%d %.2fs", w1, h1, d1, w2, h2, d2)
-	if w, h, _ := ffprobe(t, fp, path); w != 64 || h != 48 {
-		t.Fatalf("first file %dx%d", w, h)
+	if w1 != 64 || h1 != 48 {
+		t.Fatalf("first file %dx%d", w1, h1)
 	}
-	if w, h, _ := ffprobe(t, fp, part2); w != 96 || h != 64 {
-		t.Fatalf("second file %dx%d", w, h)
+	if w2 != 96 || h2 != 64 {
+		t.Fatalf("second file %dx%d", w2, h2)
 	}
 }
 
@@ -203,4 +208,18 @@ func splitAddr(t *testing.T, addr string) (string, int) {
 	}
 	n, _ := strconv.Atoi(p)
 	return host, n
+}
+
+func TestProbeRejectsFFmpegWithoutLibx264(t *testing.T) {
+	bin := fakeEncoder(t, "echo ' V..... mpeg4  MPEG-4 part 2'")
+	if New(Config{Dir: t.TempDir(), FFmpeg: bin}).Enabled() {
+		t.Fatal("enabled without libx264")
+	}
+}
+
+func TestProbeAcceptsFFmpegWithLibx264(t *testing.T) {
+	bin := fakeEncoder(t, "echo ' V....D libx264  H.264'")
+	if !New(Config{Dir: t.TempDir(), FFmpeg: bin}).Enabled() {
+		t.Fatal("disabled despite libx264")
+	}
 }

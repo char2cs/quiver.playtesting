@@ -38,6 +38,7 @@ type encoder struct {
 	in     *os.File
 	stderr *capBuf
 	done   chan error
+	out    string
 }
 
 // startEncoder runs ffmpeg reading raw BGRA frames of w*h from stdin and writing fragmented H.264 mp4 to out.
@@ -62,7 +63,7 @@ func startEncoder(ffmpeg, out string, w, h, fps int) (*encoder, error) {
 	}
 	cmd := exec.Command(ffmpeg, args...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-	e := &encoder{cmd: cmd, stderr: &capBuf{}, done: make(chan error, 1)}
+	e := &encoder{cmd: cmd, stderr: &capBuf{}, done: make(chan error, 1), out: out}
 	cmd.Stderr = e.stderr
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -70,6 +71,7 @@ func startEncoder(ffmpeg, out string, w, h, fps int) (*encoder, error) {
 		return nil, err
 	}
 	cmd.Stdin = pr
+	cmd.WaitDelay = 2 * time.Second
 	e.in = pw
 	err = cmd.Start()
 	pr.Close()
@@ -84,6 +86,7 @@ func startEncoder(ffmpeg, out string, w, h, fps int) (*encoder, error) {
 }
 
 func (e *encoder) WriteFrame(p []byte) error {
+	// Best effort: SetWriteDeadline is a no-op on some platforms (pipes on Windows).
 	// A stalled ffmpeg must not block the recording loop, and so stop, forever.
 	_ = e.in.SetWriteDeadline(time.Now().Add(writeWait))
 	_, err := e.in.Write(p)
@@ -96,12 +99,21 @@ func (e *encoder) Finish(timeout time.Duration) error {
 	select {
 	case err := <-e.done:
 		if err != nil {
+			e.removeIfEmpty()
 			return fmt.Errorf("ffmpeg: %w: %s", err, e.stderr.String())
 		}
 		return nil
 	case <-time.After(timeout):
 		e.cmd.Process.Kill()
 		<-e.done
+		e.removeIfEmpty()
 		return fmt.Errorf("ffmpeg did not finish within %s", timeout)
+	}
+}
+
+// removeIfEmpty drops a file ffmpeg never wrote to; a file with content is playable partial video.
+func (e *encoder) removeIfEmpty() {
+	if st, err := os.Stat(e.out); err == nil && st.Size() == 0 {
+		os.Remove(e.out)
 	}
 }
