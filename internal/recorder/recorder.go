@@ -20,7 +20,7 @@ import (
 
 const (
 	dialWait   = 3 * time.Second
-	finishWait = 10 * time.Second
+	finishWait = 5 * time.Second
 	diskEvery  = 30 * time.Second
 )
 
@@ -123,6 +123,8 @@ func (r *Recorder) Start(ctx context.Context, s core.Session, vm core.VM) (strin
 		return "", noop
 	}
 	_ = os.Chmod(dir, 0o700)
+	now := time.Now()
+	_ = os.Chtimes(dir, now, now) // a reused folder must not look old to Prune before the first file lands
 	dctx, cancel := context.WithTimeout(ctx, dialWait)
 	conn, err := r.dial(dctx, net.JoinHostPort(vm.Host, strconv.Itoa(vm.Port)), vm.Password)
 	cancel()

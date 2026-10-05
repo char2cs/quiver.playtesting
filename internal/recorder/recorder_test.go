@@ -246,3 +246,22 @@ func TestCapturePanicIsContained(t *testing.T) {
 		t.Fatal("semaphore slot leaked")
 	}
 }
+
+func TestStartRefreshesReusedFolderMtime(t *testing.T) {
+	srv := rfbtest.NewFB(t, "", 64, 48)
+	r, dir := newRec(t, fakeEncoder(t, "cat >/dev/null"), 1)
+	folder := filepath.Join(dir, "link-5-alpha-team")
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(folder, old, old)
+	_, stop := r.Start(t.Context(), session(), vmFor(t, srv))
+	defer stop()
+	if n, err := Prune(dir, time.Hour, time.Now()); err != nil || n != 0 {
+		t.Fatalf("prune %d %v", n, err)
+	}
+	if _, err := os.Stat(folder); err != nil {
+		t.Fatalf("folder of a live recording was pruned: %v", err)
+	}
+}
