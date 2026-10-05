@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -38,6 +39,9 @@ var checkEncoders = func(bin string) error {
 	}
 	return nil
 }
+
+// runCapture is a variable so tests can make the capture goroutine fail in ways the wire cannot.
+var runCapture = RunPaced
 
 var errResized = errors.New("screen size changed")
 
@@ -156,9 +160,15 @@ func (r *Recorder) record(ctx context.Context, conn net.Conn, dir string, s core
 	ready := make(chan *Framebuffer, 1)
 	capErr := make(chan error, 1)
 	go func() {
-		err := RunPaced(ectx, conn, time.Second/time.Duration(r.cfg.FPS), func(f *Framebuffer) { ready <- f })
-		capErr <- err
-		ecancel()
+		var err error
+		defer func() {
+			if v := recover(); v != nil {
+				err = fmt.Errorf("capture panic: %v", v)
+			}
+			capErr <- err
+			ecancel()
+		}()
+		err = runCapture(ectx, conn, time.Second/time.Duration(r.cfg.FPS), func(f *Framebuffer) { ready <- f })
 	}()
 	var fb *Framebuffer
 	select {

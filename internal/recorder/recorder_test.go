@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -221,5 +222,27 @@ func TestProbeAcceptsFFmpegWithLibx264(t *testing.T) {
 	bin := fakeEncoder(t, "echo ' V....D libx264  H.264'")
 	if !New(Config{Dir: t.TempDir(), FFmpeg: bin}).Enabled() {
 		t.Fatal("disabled despite libx264")
+	}
+}
+
+func TestCapturePanicIsContained(t *testing.T) {
+	old := runCapture
+	runCapture = func(context.Context, net.Conn, time.Duration, func(*Framebuffer)) error { panic("hostile") }
+	t.Cleanup(func() { runCapture = old })
+	srv := rfbtest.NewFB(t, "", 64, 48)
+	r, _ := newRec(t, fakeEncoder(t, "cat >/dev/null"), 1)
+	_, stop := r.Start(t.Context(), session(), vmFor(t, srv))
+	done := make(chan struct{})
+	go func() { stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stop did not return after a capture panic")
+	}
+	select {
+	case r.sem <- struct{}{}:
+		<-r.sem
+	default:
+		t.Fatal("semaphore slot leaked")
 	}
 }
