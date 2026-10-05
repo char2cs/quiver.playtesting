@@ -34,6 +34,28 @@ Operator checklist: forward only the gateway port; ideally allow inbound on it o
 
 Local end to end test VM: see `testenv/README.md`. Design: `docs/superpowers/specs/`.
 
+## Session recordings
+
+Every session is recorded from connect to disconnect, so you can review what a playtester did. The gateway opens a second, shared VNC connection to the VM and pipes the frames to `ffmpeg`, which writes one fragmented H.264 mp4 per connection. The file is playable while the session is still running and survives a crash up to the last fragment. Files go to `<recordings-dir>/link-<id>-<label>/<UTC timestamp>_<session id>.mp4`, with the folder mode 0700 and the file mode 0600. The default recordings dir is `<data>/recordings`. The path of the first file also appears in the `session_log.recording` column and in the Rec column of the TUI Sessions tab.
+
+`ffmpeg` must be installed on the host (`apt install ffmpeg` on Debian). If it is missing the gateway logs a warning at start and runs unrecorded.
+
+| Flag | Env | Default |
+|---|---|---|
+| `--recordings` | `QP_RECORDINGS` | true |
+| `--recordings-dir` | `QP_RECORDINGS_DIR` | `<data>/recordings` |
+| `--ffmpeg` | `QP_FFMPEG` | `ffmpeg` |
+| `--record-fps` | `QP_RECORD_FPS` | 10 (1 to 30) |
+| `--recordings-max` | `QP_RECORDINGS_MAX` | 2 concurrent recordings |
+| `--recordings-min-free` | `QP_RECORDINGS_MIN_FREE` | 2GiB |
+| `--recordings-retention` | `QP_RECORDINGS_RETENTION` | 720h (30 days), `0` keeps everything |
+
+Limits: at most `--recordings-max` sessions are recorded at once, recording stops when free disk space drops below `--recordings-min-free`, and files older than the retention are deleted daily. A session never depends on its recording: when ffmpeg is missing, the limits are hit or ffmpeg dies, the session keeps working unrecorded.
+
+While recording is available the session page header shows "This session is recorded", so playtesters are told.
+
+A recording contains whatever the playtester does on the VM, including anything they type or open. Treat the recordings directory as operator-only and keep it on a disk only the service user can read.
+
 ## Deploy as a Quiver arrow
 
 `ARROW.md` is an `arrow@v0` manifest (banner, explanation and manifest in one file, like the Quiver arrows) (validated with quiver.core's parser). It installs the release binary for `linux/amd64` or `linux/arm64` and runs `serve` as a service.

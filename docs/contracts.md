@@ -4,7 +4,10 @@ Module: `quiver-playtesting`. Go 1.26. Deps already in go.mod: modernc.org/sqlit
 Style: simple, minimal comments (only non-obvious WHY), no em/en dashes anywhere. Security first. Each package ships its own tests (`go test ./...` must pass, `go vet` clean).
 
 ## internal/store  (Store: core.Store)
-`store.Open(path string) (*store.Store, error)` SQLite via modernc (driver name "sqlite"), creates schema, WAL, foreign keys on, file mode 0600, `SetMaxOpenConns` sane. Tables vms, links (token_hash BLOB UNIQUE, 32 bytes), session_log. RemoveVM revokes its links then deletes the VM (keep links rows, vm_name resolved via join; if VM deleted show name from a snapshot column `vm_name`). All queries parameterized.
+`store.Open(path string) (*store.Store, error)` SQLite via modernc (driver name "sqlite"), creates schema, WAL, foreign keys on, file mode 0600, `SetMaxOpenConns` sane. Tables vms, links (token_hash BLOB UNIQUE, 32 bytes), session_log. RemoveVM revokes its links then deletes the VM (keep links rows, vm_name resolved via join; if VM deleted show name from a snapshot column `vm_name`). All queries parameterized. `session_log.recording TEXT NOT NULL DEFAULT ''` holds the path of the session's first mp4 file, empty when the session was not recorded (added to existing databases by an idempotent ALTER TABLE at open).
+
+## core.Session JSON
+Besides id, link_id, label, vm_id, vm_name, client_ip and started_at, a session carries `recording` (string, omitted when empty): the path of the first mp4 file of the session, set once recording has started and empty while the session is unrecorded. The TUI Sessions tab shows it as the Rec column.
 
 ## internal/live  (live session registry)
 ```go
