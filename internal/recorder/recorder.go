@@ -156,7 +156,7 @@ func (r *Recorder) record(ctx context.Context, conn net.Conn, dir string, s core
 	ready := make(chan *Framebuffer, 1)
 	capErr := make(chan error, 1)
 	go func() {
-		err := Run(ectx, conn, func(f *Framebuffer) { ready <- f })
+		err := RunPaced(ectx, conn, time.Second/time.Duration(r.cfg.FPS), func(f *Framebuffer) { ready <- f })
 		capErr <- err
 		ecancel()
 	}()

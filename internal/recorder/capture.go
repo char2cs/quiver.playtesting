@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 )
 
 // ErrProtocol marks a server that sent something the capture client does not accept.
@@ -52,17 +53,23 @@ func protoErr(format string, a ...any) error {
 // ready is called once, as soon as the screen size is known. Run returns nil when ctx ends and an error
 // when the connection or the server fails. It closes conn on return.
 func Run(ctx context.Context, conn net.Conn, ready func(*Framebuffer)) error {
+	return RunPaced(ctx, conn, 0, ready)
+}
+
+// RunPaced is Run with at least minGap between two update requests, so a busy screen is not read faster
+// than the encoder samples it. The first request is never delayed.
+func RunPaced(ctx context.Context, conn net.Conn, minGap time.Duration, ready func(*Framebuffer)) error {
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	err := run(conn, ready)
+	err := run(ctx, conn, minGap, ready)
 	if ctx.Err() != nil {
 		return nil
 	}
 	return err
 }
 
-func run(conn net.Conn, ready func(*Framebuffer)) error {
+func run(ctx context.Context, conn net.Conn, minGap time.Duration, ready func(*Framebuffer)) error {
 	br := bufio.NewReaderSize(conn, 64<<10)
 	if _, err := conn.Write([]byte{1}); err != nil {
 		return err
@@ -84,6 +91,7 @@ func run(conn net.Conn, ready func(*Framebuffer)) error {
 	if _, err := conn.Write(append(setup(), request(false, w, h)...)); err != nil {
 		return err
 	}
+	lastReq := time.Now()
 	ready(fb)
 
 	var raw []byte
@@ -97,7 +105,17 @@ func run(conn net.Conn, ready func(*Framebuffer)) error {
 			if raw, err = readUpdate(br, fb, raw); err != nil {
 				return err
 			}
+			if wait := minGap - time.Since(lastReq); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				}
+			}
 			w, h := fb.Size()
+			lastReq = time.Now()
 			if _, err := conn.Write(request(true, w, h)); err != nil {
 				return err
 			}

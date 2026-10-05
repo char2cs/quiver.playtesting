@@ -234,3 +234,73 @@ func TestRunAcceptsCopyRectsWithinCap(t *testing.T) {
 		t.Fatalf("got %v, want the update accepted", err)
 	}
 }
+
+// countRequests runs a paced capture against a screen that changes every millisecond and
+// returns how many update requests the server saw in one second.
+func countRequests(t *testing.T, minGap time.Duration) int {
+	t.Helper()
+	srv := rfbtest.NewFB(t, "", 8, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := rfb.Dial(ctx, srv.Addr(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- RunPaced(ctx, conn, minGap, func(*Framebuffer) {}) }()
+	stopDirty := make(chan struct{})
+	go func() {
+		for i := byte(0); ; i++ {
+			select {
+			case <-stopDirty:
+				return
+			case <-time.After(time.Millisecond):
+				srv.Fill(i, i, i)
+			}
+		}
+	}()
+	time.Sleep(time.Second)
+	n := srv.Requests()
+	close(stopDirty)
+	cancel()
+	<-done
+	return n
+}
+
+func TestRunPacedLimitsRequestRate(t *testing.T) {
+	paced := countRequests(t, 100*time.Millisecond)
+	if paced > 12 {
+		t.Errorf("paced capture sent %d requests in a second, want about 10", paced)
+	}
+	if free := countRequests(t, 0); free < 3*paced {
+		t.Errorf("unpaced capture sent %d requests, paced %d: pacing has no effect", free, paced)
+	}
+}
+
+func TestRunPacedCancelDuringWait(t *testing.T) {
+	srv := rfbtest.NewFB(t, "", 8, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := rfb.Dial(ctx, srv.Addr(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() { done <- RunPaced(ctx, conn, time.Minute, func(*Framebuffer) { got <- struct{}{} }) }()
+	<-got
+	time.Sleep(200 * time.Millisecond) // the first update has arrived and the capture is waiting to ask for the next
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cancel returned %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("RunPaced did not return promptly")
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatal("slow")
+	}
+}

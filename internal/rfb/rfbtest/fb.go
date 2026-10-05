@@ -23,6 +23,7 @@ type FB struct {
 	shared  bool
 	encs    []int32
 	clients int
+	reqs    int
 	conns   []net.Conn
 	closed  bool
 }
@@ -100,6 +101,13 @@ func (f *FB) Encodings() []int32 {
 	return append([]int32(nil), f.encs...)
 }
 
+// Requests is the number of FramebufferUpdateRequests received from all clients so far.
+func (f *FB) Requests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reqs
+}
+
 func (f *FB) Clients() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -157,6 +165,9 @@ func (f *FB) handle(c net.Conn) {
 				if _, err := io.ReadFull(c, rq[:]); err != nil {
 					return
 				}
+				f.mu.Lock()
+				f.reqs++
+				f.mu.Unlock()
 				select {
 				case reqs <- rq[0] != 0:
 				case <-stop:
