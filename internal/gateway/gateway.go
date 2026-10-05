@@ -437,14 +437,24 @@ func (h *handler) bridge(ctx context.Context, cancel context.CancelCauseFunc, ws
 			}
 		})
 	} else {
-		cp := func(dst, src net.Conn) {
+		cp := func(dst, src net.Conn, clientInit bool) {
 			defer wg.Done()
 			defer cancel(errors.New(reasonClosed))
+			if clientInit {
+				// Same as the relay: the VM always sees a shared ClientInit, whatever the browser sent.
+				var ci [1]byte
+				if _, err := io.ReadFull(src, ci[:]); err != nil {
+					return
+				}
+				if _, err := dst.Write([]byte{1}); err != nil {
+					return
+				}
+			}
 			io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, make([]byte, copyBufSize))
 		}
 		wg.Add(2)
-		goSafe(func() { cp(b, a) })
-		goSafe(func() { cp(a, b) })
+		goSafe(func() { cp(b, a, true) })
+		goSafe(func() { cp(a, b, false) })
 	}
 	wg.Add(1)
 	goSafe(func() {

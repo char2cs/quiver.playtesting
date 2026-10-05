@@ -177,7 +177,9 @@ func (r *relay) init(br *bufio.Reader, vm io.Reader) error {
 	if _, err := io.ReadFull(br, ci[:]); err != nil {
 		return err
 	}
-	if _, err := r.vm.Write(ci[:]); err != nil {
+	// The browser's shared flag is not forwarded: a non-shared client makes common VNC servers drop
+	// every other viewer, which would end the gateway's own recording connection.
+	if _, err := r.vm.Write([]byte{1}); err != nil {
 		return err
 	}
 	var si [24]byte

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -474,5 +475,39 @@ func TestContinuousUpdatesBadClientMessage(t *testing.T) {
 	io.Copy(io.Discard, nc)
 	if r := waitLog(t, e.b); r != reasonBadRFB {
 		t.Fatalf("reason %q", r)
+	}
+}
+
+func TestBrowserClientInitIsAlwaysShared(t *testing.T) {
+	for _, continuous := range []bool{true, false} {
+		t.Run(fmt.Sprintf("continuous=%v", continuous), func(t *testing.T) {
+			e := setup(t, Config{ContinuousUpdates: continuous})
+			vm := rfbtest.NewFB(t, "", 64, 48)
+			e.b.add("tok1", 1, vm.Addr(), "")
+			ws, _, err := e.dial(t, "tok1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			nc := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
+			defer nc.Close()
+			nc.SetDeadline(time.Now().Add(5 * time.Second))
+			io.ReadFull(nc, make([]byte, 12))
+			nc.Write([]byte("RFB 003.008\n"))
+			io.ReadFull(nc, make([]byte, 2))
+			nc.Write([]byte{1})
+			io.ReadFull(nc, make([]byte, 4))
+			nc.Write([]byte{0}) // ClientInit with shared = 0
+			si := make([]byte, 24)
+			if _, err := io.ReadFull(nc, si); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for vm.Clients() == 0 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if !vm.Shared() {
+				t.Fatal("the VM saw shared = 0")
+			}
+		})
 	}
 }
