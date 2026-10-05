@@ -36,9 +36,9 @@ Local end to end test VM: see `testenv/README.md`. Design: `docs/superpowers/spe
 
 ## Session recordings
 
-Every session is recorded from connect to disconnect, so you can review what a playtester did. The gateway opens a second, shared VNC connection to the VM and pipes the frames to `ffmpeg`, which writes one fragmented H.264 mp4 per connection. The file is playable while the session is still running and survives a crash up to the last fragment. Files go to `<recordings-dir>/link-<id>-<label>/<UTC timestamp>_<session id>.mp4`, with the folder mode 0700 and the file mode 0600. The default recordings dir is `<data>/recordings`. The path of the first file also appears in the `session_log.recording` column and in the Rec column of the TUI Sessions tab.
+Every session is recorded from connect to disconnect, so you can review what a playtester did. The gateway opens a second, shared VNC connection to the VM and pipes the frames to `ffmpeg`, which writes one fragmented H.264 mp4 per connection. The file is playable while the session is still running and survives a crash up to the last fragment. Files go to `<recordings-dir>/link-<id>-<label-slug>/<UTC timestamp>_<session id>.mp4`, with the folder mode 0700 and the file mode 0600. If the VM's screen resolution changes mid-session, the recording continues in a new file with a `_part2.mp4` suffix (then `_part3`, and so on). The default recordings dir is `<data>/recordings`. The path of the first file also appears in the `session_log.recording` column and in the Rec column of the TUI Sessions tab.
 
-`ffmpeg` must be installed on the host (`apt install ffmpeg` on Debian). If it is missing the gateway logs a warning at start and runs unrecorded.
+`ffmpeg` must be installed on the host (`apt install ffmpeg` on Debian) and must include the libx264 encoder, which the Debian package does. If ffmpeg is missing or has no libx264 the gateway logs a warning at start (`recording disabled: ffmpeg not found`) and runs unrecorded, and the recording notice in the session header is hidden. The gateway never serves recordings over HTTP.
 
 | Flag | Env | Default |
 |---|---|---|
@@ -50,7 +50,7 @@ Every session is recorded from connect to disconnect, so you can review what a p
 | `--recordings-min-free` | `QP_RECORDINGS_MIN_FREE` | 2GiB |
 | `--recordings-retention` | `QP_RECORDINGS_RETENTION` | 720h (30 days), `0` keeps everything |
 
-Limits: at most `--recordings-max` sessions are recorded at once, recording stops when free disk space drops below `--recordings-min-free`, and files older than the retention are deleted daily. A session never depends on its recording: when ffmpeg is missing, the limits are hit or ffmpeg dies, the session keeps working unrecorded.
+Limits: at most `--recordings-max` sessions are recorded at once, recording stops when free disk space drops below `--recordings-min-free`, and files older than the retention are deleted hourly. A session never depends on its recording: when ffmpeg is missing, the limits are hit or ffmpeg dies, the session keeps working unrecorded.
 
 While recording is available the session page header shows "This session is recorded", so playtesters are told.
 

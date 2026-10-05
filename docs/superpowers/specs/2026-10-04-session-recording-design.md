@@ -58,9 +58,8 @@ The notice must be true, so the gateway only shows it while recording is actuall
 
 ### Visibility
 
-- `core.Session` gets `Recording string`, the path of the first mp4 file (empty when not recording). `session_log` gets a `recording TEXT NOT NULL DEFAULT ''` column (added by a migration on startup) holding the same path.
+- `core.Session` gets `Recording string`, the path of the first mp4 file (empty when not recording). `session_log` gets a `recording TEXT NOT NULL DEFAULT ''` column (added by a migration on startup) holding the same path, so the operator can find the file for a logged session.
 - The TUI Sessions tab shows a REC marker for sessions being recorded.
-- This lets the operator find the file for a logged session.
 
 ## Configuration
 
